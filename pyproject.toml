@@ -1,0 +1,56 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "geofvbridge"
+version = "1.0.0"
+description = "Solver-independent Gmsh-to-finite-volume preprocessing for geological models."
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{name = "Zetang Li"}]
+dependencies = [
+  "numpy>=1.26,<3",
+  "meshio>=5.3,<6",
+  "h5py>=3.11,<4",
+  "PySide6>=6.7,<7",
+  "pyqtdarktheme-fork>=2.3.4,<3",
+]
+
+[project.optional-dependencies]
+visualization = ["pyvista>=0.44,<1", "pyvistaqt>=0.11,<1"]
+dev = [
+  "build>=1,<2",
+  "pytest>=8,<10",
+  "pytest-cov>=5,<8",
+  "pytest-qt>=4.4,<5",
+  "ruff>=0.11,<1",
+]
+
+[project.urls]
+Homepage = "https://github.com/ZetangLi/GeoFVBridge"
+Repository = "https://github.com/ZetangLi/GeoFVBridge"
+Issues = "https://github.com/ZetangLi/GeoFVBridge/issues"
+
+[project.scripts]
+geofvbridge = "geofvbridge.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-config --strict-markers"
+qt_api = "pyside6"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]

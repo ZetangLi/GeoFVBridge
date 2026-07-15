@@ -1,0 +1,47 @@
+# Python bytecode and packaging metadata
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+
+# Test, lint, and coverage caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Build artifacts
+build/
+dist/
+*.whl
+
+# Local environments and editor settings
+.venv/
+venv/
+.env
+.env.*
+.idea/
+.vscode/
+
+# Operating-system files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# GeoFVBridge runtime and generated solver artifacts
+.runtime/
+*.geofv.h5
+*.summary.json
+*.vtu
+MESH
+INCON
+flow.inp
+cell_map.csv
+mesh_manifest.json
+export_manifest.json
+GeoFVBridge_Extract/
+*.log
