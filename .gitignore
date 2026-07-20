@@ -45,3 +45,16 @@ mesh_manifest.json
 export_manifest.json
 GeoFVBridge_Extract/
 *.log
+
+# Curated public example artifacts override the runtime-output rules above.
+!examples/**/2_turn/*.geofv.h5
+!examples/**/2_turn/*.summary.json
+!examples/**/2_turn/*.vtu
+!examples/**/2_turn/MESH
+!examples/**/2_turn/cell_map.csv
+!examples/**/2_turn/mesh_manifest.json
+!examples/**/3_run/MESH
+!examples/**/3_run/INCON
+!examples/**/3_run/flow.inp
+!examples/**/3_run/GeoFVBridge_Extract/
+!examples/**/3_run/GeoFVBridge_Extract/**

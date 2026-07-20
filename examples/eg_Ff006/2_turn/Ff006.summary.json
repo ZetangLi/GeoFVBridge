@@ -1,0 +1,47 @@
+{
+  "schema_version": "1.1",
+  "dimension": 2,
+  "length_unit": "m",
+  "points": 3412,
+  "cells": 6600,
+  "faces": 10011,
+  "connections": 9789,
+  "boundaries": 222,
+  "sources": 0,
+  "materials": {
+    "RockG": 505,
+    "RockF": 2056,
+    "RockC": 385,
+    "RoESF": 1771,
+    "RockE": 928,
+    "RockD": 534,
+    "BARRI": 38,
+    "Water": 383
+  },
+  "measure_total": 3.92,
+  "measure_min": 1.4754005651660417e-05,
+  "orthogonality_min": 0.3519036864848133,
+  "orthogonality_median": 0.9983780587451576,
+  "face_nonplanarity_max": 0.0,
+  "validation": {
+    "valid": true,
+    "errors": 0,
+    "warnings": 1,
+    "issues": [
+      {
+        "severity": "warning",
+        "code": "unassigned_boundaries",
+        "message": "One or more exterior faces do not belong to a named physical group.",
+        "entity": null,
+        "entity_id": null
+      }
+    ]
+  },
+  "metadata": {
+    "source_path": "Ff006.msh",
+    "source_format": "msh",
+    "cell_types": [
+      "triangle"
+    ]
+  }
+}

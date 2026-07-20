@@ -16,12 +16,14 @@ hexahedra, pyramids, voxels, and conforming mixtures of those families.
 ## Requirements
 
 - Python 3.12
+- Git LFS for downloading the complete bundled result datasets
 - Windows is covered by the automated GUI test workflow
 - TOUGH2/ECO2M is not included; GeoFVBridge only prepares and reads its files
 
 ## Installation
 
 ```powershell
+git lfs install
 git clone https://github.com/ZetangLi/GeoFVBridge.git
 cd GeoFVBridge
 python -m venv .venv
@@ -37,9 +39,9 @@ uses this extra.
 ## Quick start
 
 ```powershell
-geofvbridge inspect examples/eg_3d004/eg3d004.msh
-geofvbridge convert examples/eg_3d004/eg3d004.msh
-geofvbridge validate examples/eg_3d004/eg3d004.geofv.h5
+geofvbridge inspect examples/eg_3d004/1_msh/eg3d004.msh
+geofvbridge convert examples/eg_3d004/1_msh/eg3d004.msh
+geofvbridge validate examples/eg_3d004/2_turn/eg3d004.geofv.h5
 geofvbridge gui
 ```
 

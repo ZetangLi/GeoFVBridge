@@ -1,0 +1,18 @@
+Gaseous CO2 was injected at a constant rate through two injection ports (INC 1 and INC 2), located at spatial coordinates of (0.9 m, 0.3 m) and (1.7 m, 0.7 m)
+
+
+Target coords:  X=0.9,  Y=0.0,  Z=0.3
+────────────────────────────────────────
+Nearest element:  A1A73
+Material:      ROCKF
+Cell center:  X=0.888622,  Y=0.009500,  Z=0.305678
+Euclidean dist:      0.015873
+
+
+
+Target coords:  X=1.7,  Y=0.0,  Z=0.7
+────────────────────────────────────────
+Nearest element:  A1V52
+Material:      ROCKE
+Cell center:  X=1.700760,  Y=0.009500,  Z=0.681786
+Euclidean dist:      0.020557

@@ -34,9 +34,12 @@ the backend, solver-preparation, or TOUGH workflow layers.
 
 - `tests/` contains geometry, topology, persistence, backend, CLI, GUI,
   visualization, report, TOUGH-page, workflow, and example tests.
-- `examples/eg_3d004/` contains an authored three-dimensional Gmsh case.
-- `examples/eg_Ff006/` contains an authored two-dimensional Gmsh case.
-- `examples/README.md` documents provenance and quick inspection commands.
+- `examples/eg_3d004/` contains an authored three-dimensional case, conversion
+  artifacts, TOUGH inputs, and result data.
+- `examples/eg_Ff006/` contains an authored two-dimensional FluidFlower case,
+  conversion artifacts, TOUGH inputs, result data, and comparison figures.
+- `examples/README.md` documents the numbered workflow stages, provenance, Git
+  LFS usage, and quick inspection commands.
 
 The public mesh examples are exercised by the normal test suite. Historical
 external regression data is optional and is selected with the
@@ -46,5 +49,6 @@ external regression data is optional and is selected with the
 
 GeoFVBridge can create `.geofv.h5`, summary JSON, VTU, `MESH`, `flow.inp`,
 `INCON`, mapping files, manifests, extracted results, and local runtime state.
-These outputs, along with Python, pytest, Ruff, coverage, and packaging caches,
-must not be committed.
+These outputs are ignored by default. The curated datasets under `examples/`
+are explicit exceptions; large raw result files there are stored with Git LFS.
+Python, pytest, Ruff, coverage, and packaging caches must not be committed.
