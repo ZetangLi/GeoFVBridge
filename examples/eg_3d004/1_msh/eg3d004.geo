@@ -1,4 +1,14 @@
+//+其他的变量设置（本文件不需要）//
+//dx1=0.02;//fine mesh size,某些区想加密，使用不同的dx进行控制//
+//dx2=0.001;//finer mesh size for crack porpagation region,扩展区域的//
 
+//dw=1.0e-5;//
+//dw1=0.02;//
+
+//设定不同边的网格数量
+//+Transfinite Curve，表示第{m}条边剖分为n个网格
+//Transfinite Curve {m}= n Using Progression 1;
+//Transfinite Curve {m}= n Using Progression 1;
 
 //------------------start-------------------//
 // Gmsh project created on 2025.8.3
@@ -36,6 +46,8 @@ Point3x=(1000*(z1*Gradx+400*(x1+dx1)))/Denom;
 Point4x=(1000*((z1+dz1)*Gradx+400*(x1+dx1)))/Denom;
 
 
+//Point(1)={(1000*(z1*(x2-x1)+400*x1))/(400000-(z2-z1)*(x2-x1), 0.0, ((z2-z1)*(1000*(z1*(x2-x1)+400*x1))/((400000-(z2-z1)*(x2-x1))/(1000+z1))};
+//不使用替代词太长无法识别
 //+点
 
 Point(1)={(1000.0*(z1*Gradx+400.0*x1))/Denom, 0.0, Gradz*Point1x/1000.0+z1, dms}; //y=0.0的xz面上的4交点

@@ -8,5 +8,24 @@
 *.json text eol=lf
 *.cff text eol=lf
 *.geo text eol=lf
-*.msh text eol=lf
+*.msh text eol=lf -whitespace
+.gitattributes text eol=lf
+.gitignore text eol=lf
+.editorconfig text eol=lf
 LICENSE text eol=lf
+
+*.h5 binary
+*.pdf binary
+*.png binary
+*.vtu binary
+
+# Fixed-width solver files use padding spaces as part of their record layout.
+MESH text eol=lf -whitespace
+INCON text eol=lf -whitespace
+CO2TAB text eol=lf -whitespace
+flow.inp text eol=lf -whitespace
+GENER.txt text eol=lf -whitespace
+
+# Large raw result data in the curated public examples
+examples/**/3_run/flow.out filter=lfs diff=lfs merge=lfs -text
+examples/**/3_run/GeoFVBridge_Extract/*.dat filter=lfs diff=lfs merge=lfs -text

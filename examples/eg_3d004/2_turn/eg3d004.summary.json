@@ -1,0 +1,41 @@
+{
+  "schema_version": "1.1",
+  "dimension": 3,
+  "length_unit": "m",
+  "points": 4591,
+  "cells": 22111,
+  "faces": 46122,
+  "connections": 42322,
+  "boundaries": 3800,
+  "sources": 0,
+  "materials": {
+    "Rocka": 14953,
+    "Rockb": 7158
+  },
+  "measure_total": 400000000.0,
+  "measure_min": 1292.25353699697,
+  "orthogonality_min": 0.3428868633624893,
+  "orthogonality_median": 0.9483525533996695,
+  "face_nonplanarity_max": 2.5944179114073457e-13,
+  "validation": {
+    "valid": true,
+    "errors": 0,
+    "warnings": 1,
+    "issues": [
+      {
+        "severity": "warning",
+        "code": "unassigned_boundaries",
+        "message": "One or more exterior faces do not belong to a named physical group.",
+        "entity": null,
+        "entity_id": null
+      }
+    ]
+  },
+  "metadata": {
+    "source_path": "eg3d004.msh",
+    "source_format": "msh",
+    "cell_types": [
+      "tetra"
+    ]
+  }
+}
