@@ -20,7 +20,7 @@ LICENSE text eol=lf
 *.vtu binary
 
 # Fixed-width solver files use padding spaces as part of their record layout.
-MESH text eol=lf -whitespace
+MESH binary -whitespace
 INCON text eol=lf -whitespace
 CO2TAB text eol=lf -whitespace
 flow.inp text eol=lf -whitespace
