@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.1 - 2026-07-24
+
+- Added complete public two-dimensional and three-dimensional example workflows,
+  including authored Gmsh inputs, GeoFVBridge outputs, TOUGH inputs and results,
+  and FluidFlower comparison artifacts.
+- Stored large raw result files with Git LFS and treated TOUGH `MESH` files as
+  binary so their exact bytes are preserved across platforms.
+- Updated GitHub Actions to Node.js 24-compatible component releases.
+
 ## 1.0.0 - 2026-07-13
 
 - Added solver-independent Gmsh-to-finite-volume conversion.
