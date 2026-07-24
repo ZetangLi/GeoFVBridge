@@ -11,6 +11,11 @@ authors:
     given-names: Zetang
 version: 1.0.1
 date-released: 2026-07-24
+doi: 10.5281/zenodo.21522918
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.21522917
+    description: Concept DOI for all GeoFVBridge versions.
 keywords:
   - finite volume
   - Gmsh
