@@ -1,6 +1,7 @@
 # GeoFVBridge
 
 [![Tests](https://github.com/ZetangLi/GeoFVBridge/actions/workflows/tests.yml/badge.svg)](https://github.com/ZetangLi/GeoFVBridge/actions/workflows/tests.yml)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.21522917.svg)](https://doi.org/10.5281/zenodo.21522917)
 
 GeoFVBridge is a solver-independent preprocessing toolkit that converts
 conforming Gmsh meshes into cell-centred finite-volume topology and geometry.
@@ -97,5 +98,7 @@ reference cases.
 
 ## Citation and license
 
-Citation metadata is available in [`CITATION.cff`](CITATION.cff). GeoFVBridge
-is released under the [MIT License](LICENSE).
+Citation metadata is available in [`CITATION.cff`](CITATION.cff). The archived
+GeoFVBridge 1.0.1 snapshot is available at
+[doi:10.5281/zenodo.21522918](https://doi.org/10.5281/zenodo.21522918).
+GeoFVBridge is released under the [MIT License](LICENSE).
