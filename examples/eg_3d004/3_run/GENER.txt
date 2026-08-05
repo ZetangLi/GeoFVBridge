@@ -1,6 +1,0 @@
-Target coords:  X=0.0,  Y=110.0,  Z=0.0
-────────────────────────────────────────
-Nearest element:  A6N54
-Material:      ROCKB
-Cell center:  X=6.250000,  Y=126.562500,  Z=6.250000
-Euclidean dist:      18.773423
