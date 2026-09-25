@@ -327,7 +327,7 @@ class GuiTests(unittest.TestCase):
             worker.wait()
             application.processEvents()
             self.assertTrue(window.page_import.isEnabled())
-            self.assertEqual(window.model_path, h5_path)
+            self.assertTrue(window.model_path.samefile(h5_path))
             self.assertFalse(window.page_dataset.generate_button.isEnabled())
             self.assertTrue(window.sidebar.buttons[Sidebar.PAGE_SOLVER].isEnabled())
 
