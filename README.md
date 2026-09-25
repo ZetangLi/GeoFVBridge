@@ -3,77 +3,152 @@
 [![Tests](https://github.com/ZetangLi/GeoFVBridge/actions/workflows/tests.yml/badge.svg)](https://github.com/ZetangLi/GeoFVBridge/actions/workflows/tests.yml)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.21522917.svg)](https://doi.org/10.5281/zenodo.21522917)
 
-GeoFVBridge is a solver-independent preprocessing toolkit that converts
-conforming Gmsh meshes or Petrel-exported ECLIPSE corner-point grids into
-cell-centred finite-volume topology and geometry.
-It provides a Python API, command-line interface, staged desktop GUI, a
-versioned HDF5 interchange format, and a TOUGH2/ECO2M export backend.
+GeoFVBridge converts **Gmsh meshes** and **Petrel-exported ECLIPSE grids** into
+reusable, cell-centred finite-volume datasets, then prepares **TOUGH2/ECO2M**
+input files. It includes a desktop GUI, command-line tools, and a Python API.
 
-The conversion core computes cells, faces, connections, boundaries, sources,
-geometric measures and centroids, face normals, centroid-line intersection
-distances, gravity projections, and non-orthogonality diagnostics. Supported
-first-order cells include triangles, quadrilaterals, tetrahedra, wedges,
-hexahedra, pyramids, voxels, and conforming mixtures of those families.
+**Current release: [v1.1.2](https://github.com/ZetangLi/GeoFVBridge/releases/tag/v1.1.2).**
+See the [English/Chinese release notes](docs/releases/v1.1.2.md) for the changes
+since v1.0.1 and compatibility guidance.
 
-**Current release: 1.1.2.** See the [cumulative release notes](docs/releases/v1.1.2.md)
-for the changes since 1.0.1, migration guidance, and a Chinese comparison.
+## 1. Install and launch
 
-## Requirements
+Use **Python 3.12**. Run these commands in a terminal, such as Windows
+PowerShell or an Anaconda Prompt with a Python 3.12 environment activated.
 
-- Python 3.12
-- Git LFS for downloading the complete bundled result datasets
-- Windows is covered by the automated GUI test workflow
-- TOUGH2/ECO2M is not included; GeoFVBridge only prepares and reads its files
-
-## Installation
+### Install the stable release
 
 ```powershell
-git lfs install
-git clone https://github.com/ZetangLi/GeoFVBridge.git
-cd GeoFVBridge
-python -m venv .venv
-.venv\Scripts\Activate.ps1
+python --version
 python -m pip install --upgrade pip
-python -m pip install -e ".[visualization]"
+python -m pip install "geofvbridge[visualization] @ https://github.com/ZetangLi/GeoFVBridge/archive/refs/tags/v1.1.2.zip"
 ```
 
-The `visualization` extra installs PyVista and its Qt integration. The core API
-can be installed without it, but the complete desktop visualization workflow
-uses this extra.
+The `visualization` extra installs PyVista and its Qt integration for the
+desktop viewer. This method does not require Git or a manual source-code download.
 
-## Quick start
+### Launch the application
 
 ```powershell
-geofvbridge inspect examples/eg_3d004/1_msh/eg3d004.msh
-geofvbridge convert examples/eg_3d004/1_msh/eg3d004.msh
-geofvbridge validate examples/eg_3d004/2_turn/eg3d004.geofv.h5
-geofvbridge gui
+python -m geofvbridge
 ```
 
-For a Petrel ECLIPSE export, use an EGRID file with optional matching INIT,
-property GRDECL, grid NNC GRDECL, and UNRST files:
+This opens the desktop GUI. Use the **same Python environment** for installation
+and launch. You can launch it from any working directory.
+
+To check the installed version:
 
 ```powershell
-geofvbridge inspect reservoir.EGRID
-geofvbridge convert reservoir.EGRID
-geofvbridge convert reservoir.EGRID --grid-mode vertical-runs
+python -m geofvbridge --version
 ```
 
-Native mode preserves active corner-point cells. `vertical-runs` merges each
-continuous active K run in an I/J column, retains source membership, and
-records volume, pore-volume, and source-connection conservation diagnostics.
-This reads simulator exports; it does not open proprietary Petrel projects.
+### Install the latest main-branch code instead
 
-Running `geofvbridge` or `python -m geofvbridge` without arguments also opens
-the GUI. Each conversion writes three reusable artifacts beside the input:
+To use the current development code rather than the fixed v1.1.2 snapshot:
 
-- `<input-stem>.geofv.h5`: authoritative FV topology and geometry;
-- `<input-stem>.summary.json`: statistics and validation report;
-- `<input-stem>.vtu`: ParaView/PyVista visualization data.
+```powershell
+python -m pip install --upgrade "geofvbridge[visualization] @ https://github.com/ZetangLi/GeoFVBridge/archive/refs/heads/main.zip"
+python -m geofvbridge
+```
 
-The HDF5 file can be loaded later and exported without the original Gmsh file.
-For a complete CLI/API export from a native two-dimensional dataset, provide
-solver-stage extrusion settings in the backend JSON:
+The `main` URL changes as development continues; the version-tag URL installs
+the published snapshot. Other versions remain available under
+[Releases](https://github.com/ZetangLi/GeoFVBridge/releases).
+
+<details>
+<summary>Optional: create a separate Python environment on Windows</summary>
+
+If you do not already have a suitable environment, create one with the Windows
+Python launcher, then use its Python executable directly:
+
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
+.\.venv\Scripts\python.exe -m pip install "geofvbridge[visualization] @ https://github.com/ZetangLi/GeoFVBridge/archive/refs/tags/v1.1.2.zip"
+.\.venv\Scripts\python.exe -m geofvbridge
+```
+
+This assumes Python 3.12 and the `py` launcher are installed. These commands
+do not require running a PowerShell activation script.
+
+</details>
+
+## 2. Use the desktop GUI
+
+The sidebar guides you through seven stages:
+
+| Stage | What to do | Output |
+|---|---|---|
+| 1. Import | Select and inspect a Gmsh mesh or Petrel ECLIPSE export. | Input information and mesh preview |
+| 2. FV dataset | Convert and save the reusable finite-volume model. | `.geofv.h5`, `.summary.json`, `.vtu` |
+| 3. Solver | Select TOUGH2/ECO2M and prepare the solver model. | Solver preparation settings |
+| 4. MESH | Configure extrusion for 2-D input, inactive cells and heat-exchange areas; preview and export. | `MESH`, `cell_map.csv`, `mesh_manifest.json` |
+| 5. Simulation input | Set materials, run parameters and sources. | `flow.inp` |
+| 6. Initial conditions | Set pressure, temperature and other initial-state parameters. | `INCON` |
+| 7. Results | Load existing TOUGH output and extract results. | Extracted result files |
+
+You can reopen a saved `.geofv.h5` dataset without its original source mesh.
+TOUGH2/ECO2M itself is **not included**: run the exported inputs with your solver,
+then return to the results page to read `flow.out`.
+
+## 3. Use the command line
+
+The examples below use `python -m geofvbridge`, so they use the same interpreter
+as the installation commands. Replace the example filenames with your files;
+quote paths that contain spaces.
+
+### Convert a Gmsh mesh
+
+```powershell
+python -m geofvbridge inspect "model.msh"
+python -m geofvbridge convert "model.msh"
+python -m geofvbridge validate "model.geofv.h5"
+```
+
+By default, conversion writes these files beside the input:
+
+| File | Purpose |
+|---|---|
+| `model.geofv.h5` | Reusable FV topology, geometry and metadata |
+| `model.summary.json` | Statistics and validation report |
+| `model.vtu` | ParaView/PyVista visualization data |
+
+### Convert a Petrel ECLIPSE export
+
+Place the EGRID file and any matching INIT, property GRDECL, NNC GRDECL and
+UNRST files together, then run:
+
+```powershell
+python -m geofvbridge inspect "reservoir.EGRID"
+python -m geofvbridge convert "reservoir.EGRID"
+python -m geofvbridge validate "reservoir.geofv.h5"
+```
+
+Native mode preserves active corner-point cells. To merge each continuous
+active K run in an I/J column, choose the optional `vertical-runs` mode and a
+different output name:
+
+```powershell
+python -m geofvbridge convert "reservoir.EGRID" --grid-mode vertical-runs --output "reservoir_coarse.geofv.h5"
+```
+
+Use `--initial-state first` to import the first available UNRST state. Run
+`python -m geofvbridge convert --help` for coordinate and property options.
+This route reads ECLIPSE exports, not proprietary Petrel project databases.
+
+### Export TOUGH2/ECO2M input files
+
+Prepare a backend JSON configuration, such as the
+[synthetic example configuration](examples/synthetic/eco2m.json), and adapt
+its settings and boundary names to your model:
+
+```powershell
+python -m geofvbridge export eco2m "model.geofv.h5" --config "eco2m.json" --output "tough_input"
+```
+
+This creates `MESH`, `flow.inp`, `INCON` and mapping/manifest files in
+`tough_input`. For a native 2-D dataset, include solver-stage extrusion settings
+in the backend JSON; for example:
 
 ```json
 {
@@ -85,11 +160,45 @@ solver-stage extrusion settings in the backend JSON:
 }
 ```
 
-The GUI exposes the same settings on the TOUGH MESH page.
+Choose the axis and thickness for your model. The GUI exposes these settings
+on the TOUGH MESH page.
 
-## Supported scope
+### Command help
+
+```powershell
+python -m geofvbridge --help
+python -m geofvbridge convert --help
+python -m geofvbridge export --help
+```
+
+The installed `geofvbridge` command is an equivalent entry point when your
+environment's scripts directory is on `PATH`.
+
+## 4. Download the example datasets
+
+Installing the Python package does not place the repository's example datasets
+in your working directory. For complete public examples, install Git and Git
+LFS, then clone the repository:
+
+```powershell
+git lfs install
+git clone https://github.com/ZetangLi/GeoFVBridge.git
+cd GeoFVBridge
+git lfs pull
+python -m geofvbridge inspect "examples/eg_3d004/1_msh/eg3d004.msh"
+```
+
+Git LFS is needed for the large bundled result files, not for launching the
+application. See [examples](examples/README.md) for the 3-D geological model
+and 2-D FluidFlower workflow, or [synthetic examples](examples/synthetic/README.md)
+for a small generated mesh. Bundled simulation results are historical examples;
+they were not recomputed for v1.1.2.
+
+## 5. Supported scope and numerical conventions
 
 - Gmsh 2.2 and 4.1 input is read through `meshio`.
+- Supported first-order cells include triangles, quadrilaterals, tetrahedra,
+  wedges, hexahedra, pyramids, voxels and conforming mixtures.
 - File conversion preserves a two-dimensional mesh as a native 2-D FV model.
 - Solver preparation can extrude triangles to wedges and quads to hexahedra.
 - High-order, arbitrary-polyhedral, hanging-node, and non-conforming meshes are
@@ -106,13 +215,17 @@ The GUI exposes the same settings on the TOUGH MESH page.
   isotropy and does not correct non-orthogonal flux discretization.
 - Large GUI conversions run in a cancellable process with progress reporting.
   Solver preparation, boundary previews, and MESH exports use background workers.
+- Windows is covered by the automated GUI test workflow. Python 3.12 is the
+  supported interpreter version.
 
 See [the architecture guide](docs/architecture.md) for geometry conventions,
 the HDF5 schema, validation rules, and backend behavior. See
 [the repository layout](docs/file_reference.md) and [examples](examples/README.md)
 for source-tree orientation and bundled inputs.
 
-## Development
+## 6. Development installation
+
+From the root of a cloned repository, in a Python 3.12 environment:
 
 ```powershell
 python -m pip install -e ".[dev,visualization]"
@@ -126,7 +239,7 @@ private-data regression suite can be enabled by setting
 `GEOFVBRIDGE_REGRESSION_ROOT` to the directory containing the four historical
 reference cases.
 
-## Citation and license
+## 7. Citation and license
 
 Citation metadata is available in [`CITATION.cff`](CITATION.cff). The archived
 GeoFVBridge 1.0.1 snapshot is available at
