@@ -1,3 +1,4 @@
+import json
 import os
 import runpy
 import tempfile
@@ -40,6 +41,33 @@ class CliTests(unittest.TestCase):
             if "import toughio" in text or "from toughio" in text:
                 occurrences.append(str(path))
         self.assertEqual(occurrences, [])
+
+    def test_failed_worker_keeps_previous_authoritative_dataset(self):
+        from geofvbridge.worker import run_request
+
+        with tempfile.TemporaryDirectory() as directory:
+            directory = Path(directory)
+            output = directory / "case.geofv.h5"
+            output.write_bytes(b"previous-valid-dataset")
+            with self.assertRaises(FileNotFoundError):
+                run_request(
+                    {
+                        "input": str(directory / "missing.msh"),
+                        "output": str(output),
+                    }
+                )
+            self.assertEqual(output.read_bytes(), b"previous-valid-dataset")
+            self.assertFalse(list(directory.glob(".geofvbridge-*")))
+
+    def test_worker_protocol_preserves_non_ascii_paths(self):
+        from geofvbridge.worker import _emit
+
+        path = r"C:\example-data\示例\模型.geofv.h5"
+        with patch("builtins.print") as printer:
+            _emit({"event": "complete", "result": {"model": path}})
+        payload = printer.call_args.args[0]
+        self.assertTrue(payload.isascii())
+        self.assertEqual(json.loads(payload)["result"]["model"], path)
 
     def test_fe_visualization_ignores_incompatible_gmsh_cell_sets(self):
         import pyvista as pv
@@ -89,6 +117,14 @@ class GuiTests(unittest.TestCase):
             [("tetra", np.array([[0, 1, 2, 3]]))],
         )
         meshio.write(path, mesh, file_format="gmsh22", binary=False)
+
+    @staticmethod
+    def _wait_worker(application, worker):
+        while worker is not None and worker.isRunning():
+            application.processEvents()
+            worker.wait(20)
+        application.processEvents()
+        application.processEvents()
 
     def test_seven_stage_window_and_mesh_only_export(self):
         import qdarktheme
@@ -155,13 +191,49 @@ class GuiTests(unittest.TestCase):
             self.assertTrue(window.sidebar.buttons[Sidebar.PAGE_SOLVER].isEnabled())
 
             self.assertIsNotNone(window._confirm_solver("tough2-eco2m"))
+            self._wait_worker(application, window._preparation_worker)
             self.assertTrue(window.sidebar.buttons[Sidebar.PAGE_MESH].isEnabled())
             self.assertEqual(window.page_mesh.source_combo.currentData(), "h5")
+            prepared_model = window._prepared_solver_model
+            prepared_index = window._boundary_selection_index
+            preparation_generation = window._solver_task_generation
+            window.page_mesh.source_combo.setCurrentIndex(
+                window.page_mesh.source_combo.findData("msh")
+            )
+            application.processEvents()
+            self.assertIs(window._prepared_solver_model, prepared_model)
+            self.assertIs(window._boundary_selection_index, prepared_index)
+            self.assertEqual(window._solver_task_generation, preparation_generation)
+            self.assertIsNone(window._preparation_worker)
+            window.page_mesh.source_combo.setCurrentIndex(
+                window.page_mesh.source_combo.findData("h5")
+            )
+            application.processEvents()
             self.assertTrue(window.page_mesh.extrude_group.isEnabled())
             self.assertFalse(window.page_mesh.entry_height.isEnabled())
             self.assertFalse(hasattr(window.page_mesh, "open_mesh_button"))
             self.assertFalse(window.page_mesh.open_folder_button.isEnabled())
-            self.assertIsNotNone(window._generate_mesh())
+            self.assertFalse(window.page_mesh.chk_allow_unrepresented_connections.isChecked())
+            material_mode = window.page_mesh.combo_selection_mode.findData(
+                window.page_mesh.SELECTION_MATERIAL
+            )
+            window.page_mesh.combo_selection_mode.setCurrentIndex(material_mode)
+            window.page_mesh.combo_inactive_material.setCurrentText("DEFAULT")
+            window._update_selection_statistics()
+            self.assertFalse(
+                window.page_mesh.config()["allow_unrepresented_source_connections"]
+            )
+            window.page_mesh.chk_allow_unrepresented_connections.setChecked(True)
+            self.assertTrue(
+                window.page_mesh.config()["allow_unrepresented_source_connections"]
+            )
+            export_worker = window._generate_mesh()
+            self.assertIsNotNone(export_worker)
+            self._wait_worker(application, export_worker)
+            manifest = window.solver_context.manifest
+            self.assertTrue(
+                manifest["source_connection_audit"]["ignore_was_explicitly_allowed"]
+            )
             self.assertTrue((directory / "MESH").is_file())
             self.assertTrue((directory / "cell_map.csv").is_file())
             self.assertTrue((directory / "mesh_manifest.json").is_file())
@@ -255,7 +327,7 @@ class GuiTests(unittest.TestCase):
             worker.wait()
             application.processEvents()
             self.assertTrue(window.page_import.isEnabled())
-            self.assertTrue(window.model_path.samefile(h5_path))
+            self.assertEqual(window.model_path, h5_path)
             self.assertFalse(window.page_dataset.generate_button.isEnabled())
             self.assertTrue(window.sidebar.buttons[Sidebar.PAGE_SOLVER].isEnabled())
 
@@ -269,6 +341,57 @@ class GuiTests(unittest.TestCase):
             self.assertFalse(window.sidebar.buttons[Sidebar.PAGE_SOLVER].isEnabled())
         window.close()
         application.processEvents()
+
+    def test_conversion_qprocess_can_be_cancelled(self):
+        import sys
+        import time
+
+        from PySide6.QtCore import QEventLoop, QTimer
+        from PySide6.QtWidgets import QApplication
+
+        from geofvbridge.gui.conversion_process import ConversionProcess
+
+        application = QApplication.instance() or QApplication([])
+        with tempfile.TemporaryDirectory() as directory:
+            directory = Path(directory)
+            controller = ConversionProcess(
+                directory / "dummy.msh",
+                directory / "dummy.geofv.h5",
+            )
+            controller.process.setProgram(sys.executable)
+            controller.process.setArguments(["-c", "import time; time.sleep(30)"])
+            loop = QEventLoop()
+            outcome = []
+            controller.cancelled.connect(lambda: (outcome.append("cancelled"), loop.quit()))
+            controller.failed.connect(lambda *_: (outcome.append("failed"), loop.quit()))
+            QTimer.singleShot(6000, loop.quit)
+            started = time.monotonic()
+            controller.start()
+            QTimer.singleShot(100, controller.cancel)
+            loop.exec()
+            application.processEvents()
+            self.assertEqual(outcome, ["cancelled"])
+            self.assertLess(time.monotonic() - started, 6.0)
+            self.assertFalse(controller.staging_dir.exists())
+
+    def test_conversion_qprocess_exposes_source_package_to_worker(self):
+        from geofvbridge.gui.conversion_process import ConversionProcess
+
+        with tempfile.TemporaryDirectory() as directory:
+            directory = Path(directory)
+            controller = ConversionProcess(
+                directory / "dummy.msh",
+                directory / "dummy.geofv.h5",
+            )
+            package_root = Path(__file__).parents[1] / "src"
+            python_path = controller.process.processEnvironment().value("PYTHONPATH")
+            entries = {
+                os.path.normcase(os.path.abspath(entry))
+                for entry in python_path.split(os.pathsep)
+                if entry
+            }
+            self.assertIn(os.path.normcase(os.path.abspath(package_root)), entries)
+            controller._cleanup_staging()
 
     def test_lithology_filter_preserves_selection_across_fe_fv_views(self):
         from PySide6.QtWidgets import QApplication
@@ -321,6 +444,70 @@ class GuiTests(unittest.TestCase):
         visualizer.deleteLater()
         application.processEvents()
 
+    def test_mesh_page_uses_one_selector_and_smart_defaults(self):
+        from PySide6.QtWidgets import QApplication
+
+        from geofvbridge.boundary_selection import build_boundary_selection_index
+        from geofvbridge.converter import convert_meshio
+        from geofvbridge.extrusion import extrude_meshio
+        from geofvbridge.gui.pages.page_mesh import ToughMeshPage
+
+        application = QApplication.instance() or QApplication([])
+        source = meshio.Mesh(
+            np.array([[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0.0]]),
+            [("quad", np.array([[0, 1, 2, 3]]))],
+        )
+        model = convert_meshio(extrude_meshio(source, layer_thicknesses=[0.5, 0.5]))
+        model.cells[0].material = "ROCK"
+        model.cells[1].material = "BOUND"
+        for boundary in model.boundaries:
+            face = model.faces[boundary.face]
+            if face.centroid[2] > 0.999:
+                boundary.name = "Top"
+            elif face.centroid[2] < 0.001:
+                boundary.name = "Bottom"
+            else:
+                boundary.name = "OuterSide"
+
+        page = ToughMeshPage()
+        page.materials = ["ROCK", "BOUND"]
+        page._populate_material_entries()
+        index = build_boundary_selection_index(model)
+        page.set_selection_index(index)
+        self.assertEqual(page.combo_selection_mode.currentData(), page.SELECTION_MATERIAL)
+        self.assertEqual(page.inactive_selection(), {"method": "material", "material": "BOUND"})
+
+        page.combo_selection_mode.setCurrentIndex(
+            page.combo_selection_mode.findData(page.SELECTION_BOUNDARY)
+        )
+        page.combo_boundary_group.setCurrentText("Top")
+        config = page.config()
+        self.assertEqual(
+            config["inactive_selection"],
+            {"method": "boundary_group", "boundary_group": "Top"},
+        )
+        self.assertFalse(
+            any(
+                key in config
+                for key in ("inactive_cells", "inactive_materials", "inactive_z_min", "inactive_top")
+            )
+        )
+
+        for cell in model.cells:
+            cell.material = "ROCK"
+        page.set_selection_index(build_boundary_selection_index(model))
+        self.assertEqual(page.combo_selection_mode.currentData(), page.SELECTION_BOUNDARY)
+        self.assertEqual(page.combo_boundary_group.currentText(), "Top")
+
+        for boundary in model.boundaries:
+            boundary.name = "UNASSIGNED"
+        page.set_selection_index(build_boundary_selection_index(model))
+        self.assertIsNone(page.combo_selection_mode.currentData())
+        self.assertFalse(page.btn_preview.isEnabled())
+        self.assertFalse(page.btn_generate.isEnabled())
+        page.deleteLater()
+        application.processEvents()
+
     def test_failed_h5_load_stays_on_import_page(self):
         from PySide6.QtWidgets import QApplication
 
@@ -354,15 +541,14 @@ class GuiTests(unittest.TestCase):
 
         application = QApplication.instance() or QApplication([])
         window = MainWindow()
-        window.model = SimpleNamespace()
-        window.selected_backend = "tough2-eco2m"
         with (
-            patch.object(window, "_generate_mesh", return_value={"ok": True}),
             patch.object(window, "_generate_flow_input", return_value=None),
             patch.object(window, "_generate_incon") as generate_incon,
         ):
-            window._action_run_all()
+            window._run_all_pending = True
+            window._finish_run_all_outputs()
         generate_incon.assert_not_called()
+        self.assertFalse(window._run_all_pending)
         window.close()
         application.processEvents()
 

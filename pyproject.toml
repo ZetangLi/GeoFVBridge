@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "geofvbridge"
-version = "1.0.1"
-description = "Solver-independent Gmsh-to-finite-volume preprocessing for geological models."
+version = "1.1.2"
+description = "Solver-independent Gmsh and Petrel-to-finite-volume preprocessing for geological models."
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 license = "MIT"
 license-files = ["LICENSE"]
-authors = [{name = "Zetang Li"}]
+authors = [{name = "GeoFVBridge contributors"}]
 dependencies = [
   "numpy>=1.26,<3",
   "meshio>=5.3,<6",

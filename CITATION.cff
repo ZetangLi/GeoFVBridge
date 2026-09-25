@@ -4,14 +4,13 @@ message: "If you use GeoFVBridge, please cite this software."
 type: software
 abstract: >-
   GeoFVBridge is a solver-independent preprocessing toolkit that converts
-  conforming Gmsh meshes into cell-centred finite-volume topology and geometry
+  conforming Gmsh meshes and Petrel-exported ECLIPSE grids into cell-centred
+  finite-volume topology and geometry
   for geological models.
 authors:
-  - family-names: Li
-    given-names: Zetang
-version: 1.0.1
-date-released: 2026-07-24
-doi: 10.5281/zenodo.21522918
+  - name: GeoFVBridge contributors
+version: 1.1.2
+date-released: 2026-09-25
 identifiers:
   - type: doi
     value: 10.5281/zenodo.21522917

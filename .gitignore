@@ -58,3 +58,11 @@ GeoFVBridge_Extract/
 !examples/**/3_run/flow.inp
 !examples/**/3_run/GeoFVBridge_Extract/
 !examples/**/3_run/GeoFVBridge_Extract/**
+
+# Local development context and unpublished working notes
+AGENTS.md
+docs/ai/
+tools/ai_context.py
+.codex/
+.codex_tmp/
+.agents/

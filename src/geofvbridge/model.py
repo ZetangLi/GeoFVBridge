@@ -41,6 +41,11 @@ class Cell:
     material: str = "DEFAULT"
     physical_tag: int | None = None
     source_id: int | None = None
+    source_kind: str | None = None
+    source_global_index: int | None = None
+    active_index: int | None = None
+    ijk: tuple[int, int, int] | None = None
+    source_members: tuple[int, ...] = ()
 
 
 @dataclass(slots=True)
@@ -73,6 +78,33 @@ class Connection:
     gravity_projection: float
     gravity_delta: float
     orthogonality: float
+    enabled: bool = True
+    source_connection_id: int | None = None
+
+
+@dataclass(slots=True)
+class CellField:
+    values: np.ndarray
+    unit: str = ""
+    source: str = ""
+    keyword: str = ""
+    aggregation: str = "none"
+    role: str = "property"
+
+
+@dataclass(slots=True)
+class SourceConnection:
+    id: int
+    cell1: int
+    cell2: int
+    kind: str
+    transmissibility: float
+    flow_connected: bool
+    direction: str | None = None
+    matched_connection: int | None = None
+    geometry_status: str = "unmatched"
+    source_count: int = 1
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -108,6 +140,22 @@ class ValidationIssue:
 @dataclass(slots=True)
 class ValidationReport:
     issues: list[ValidationIssue] = field(default_factory=list)
+    _issue_keys: set[tuple[str, str, str, str | None, int | None]] = field(
+        default_factory=set, init=False, repr=False, compare=False
+    )
+
+    def __post_init__(self) -> None:
+        self._issue_keys = {self._key(issue) for issue in self.issues}
+
+    @staticmethod
+    def _key(issue: ValidationIssue) -> tuple[str, str, str, str | None, int | None]:
+        return (
+            issue.severity,
+            issue.code,
+            issue.message,
+            issue.entity,
+            issue.entity_id,
+        )
 
     @property
     def errors(self) -> list[ValidationIssue]:
@@ -130,8 +178,11 @@ class ValidationReport:
         entity_id: int | None = None,
     ) -> None:
         issue = ValidationIssue(severity, code, message, entity, entity_id)
-        if issue not in self.issues:
-            self.issues.append(issue)
+        key = self._key(issue)
+        if key in self._issue_keys:
+            return
+        self._issue_keys.add(key)
+        self.issues.append(issue)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -160,6 +211,8 @@ class FVModel:
     boundaries: list[Boundary]
     sources: list[Source]
     dimension: int
+    cell_fields: dict[str, CellField] = field(default_factory=dict)
+    source_connections: list[SourceConnection] = field(default_factory=list)
     options: ConversionOptions = field(default_factory=ConversionOptions)
     metadata: dict[str, Any] = field(default_factory=dict)
     report: ValidationReport = field(default_factory=ValidationReport)
@@ -176,16 +229,38 @@ class FVModel:
         materials: dict[str, int] = {}
         for cell in self.cells:
             materials[cell.material] = materials.get(cell.material, 0) + 1
+        source_kinds: dict[str, int] = {}
+        for connection in self.source_connections:
+            source_kinds[connection.kind] = source_kinds.get(connection.kind, 0) + 1
+        diagnostics = self.metadata.get("diagnostics", {})
+        nonplanar = diagnostics.get("nonplanar_faces", {})
+
+        def source_is_represented(connection: SourceConnection) -> bool:
+            matched = connection.matched_connection
+            return (
+                matched is not None
+                and 0 <= matched < len(self.connections)
+                and self.connections[matched].enabled
+            )
+
         return {
-            "schema_version": "1.1",
+            "schema_version": "1.2",
             "dimension": self.dimension,
             "length_unit": self.options.length_unit,
             "points": int(len(self.points)),
             "cells": len(self.cells),
             "faces": len(self.faces),
             "connections": len(self.connections),
+            "enabled_connections": sum(connection.enabled for connection in self.connections),
+            "source_connections": len(self.source_connections),
+            "source_connection_kinds": source_kinds,
+            "unrepresented_positive_source_connections": sum(
+                connection.flow_connected and not source_is_represented(connection)
+                for connection in self.source_connections
+            ),
             "boundaries": len(self.boundaries),
             "sources": len(self.sources),
+            "cell_fields": sorted(self.cell_fields),
             "materials": materials,
             "measure_total": float(measures.sum()) if measures.size else 0.0,
             "measure_min": float(measures.min()) if measures.size else None,
@@ -194,6 +269,8 @@ class FVModel:
             "face_nonplanarity_max": (
                 float(nonplanarity.max()) if nonplanarity.size else None
             ),
+            "face_nonplanarity_count": int(nonplanar.get("count", 0)),
+            "face_nonplanarity_fraction": float(nonplanar.get("fraction", 0.0)),
             "validation": self.report.as_dict(),
             "metadata": self.metadata,
         }

@@ -218,6 +218,10 @@ def convert_meshio(
 
     face_by_key: dict[tuple[int, ...], int] = {}
     nonmanifold: set[int] = set()
+    nonplanar_count = 0
+    nonplanar_max = 0.0
+    nonplanar_threshold_max = 0.0
+    nonplanar_samples: list[int] = []
     for cell in model.cells:
         for local_face in LOCAL_FACES[cell.cell_type]:
             local_nodes = tuple(cell.nodes[index] for index in local_face)
@@ -252,14 +256,13 @@ def convert_meshio(
                     )
                 )
                 scale = max(float(np.sqrt(measure)), options.tolerance)
-                if planarity > max(100.0 * options.tolerance, 1.0e-8 * scale):
-                    model.report.add(
-                        "warning",
-                        "nonplanar_face",
-                        "Face vertices are not coplanar; a representative plane is used.",
-                        "face",
-                        face_id,
-                    )
+                threshold = max(100.0 * options.tolerance, 1.0e-8 * scale)
+                if planarity > threshold:
+                    nonplanar_count += 1
+                    nonplanar_max = max(nonplanar_max, float(planarity))
+                    nonplanar_threshold_max = max(nonplanar_threshold_max, float(threshold))
+                    if len(nonplanar_samples) < 20:
+                        nonplanar_samples.append(face_id)
             else:
                 face = model.faces[face_by_key[key]]
                 if face.neighbour is None:
@@ -274,6 +277,25 @@ def convert_meshio(
                         "face",
                         face.id,
                     )
+
+    nonplanar_diagnostic = {
+        "count": nonplanar_count,
+        "fraction": nonplanar_count / len(model.faces) if model.faces else 0.0,
+        "maximum": nonplanar_max,
+        "maximum_threshold": nonplanar_threshold_max,
+        "sample_face_ids": nonplanar_samples,
+        "threshold_rule": "max(100*tolerance, 1e-8*sqrt(face_measure))",
+    }
+    model.metadata.setdefault("diagnostics", {})["nonplanar_faces"] = nonplanar_diagnostic
+    if nonplanar_count:
+        model.report.add(
+            "warning",
+            "nonplanar_face",
+            (
+                f"{nonplanar_count} face(s) are non-planar; representative planes are used "
+                f"(maximum deviation {nonplanar_max:.6g})."
+            ),
+        )
 
     gravity = np.asarray(options.gravity, dtype=float)
     gravity_norm = float(np.linalg.norm(gravity))

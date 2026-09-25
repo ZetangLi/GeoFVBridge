@@ -9,14 +9,15 @@ from pathlib import Path
 
 from . import __version__
 from .api import (
-    convert_mesh,
+    convert_source,
     default_fv_dataset_path,
     export_model,
-    inspect_mesh,
+    inspect_source,
     save_fv_dataset,
 )
 from .model import ConversionOptions
 from .persistence import read_model
+from .petrel import PetrelImportOptions
 from .validation import validate_model
 
 
@@ -28,11 +29,43 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="geofvbridge")
     parser.add_argument("--version", action="version", version=f"GeoFVBridge {__version__}")
     commands = parser.add_subparsers(dest="command", required=True)
-    inspect = commands.add_parser("inspect", help="Inspect a Gmsh mesh without converting it.")
+    inspect = commands.add_parser("inspect", help="Inspect a mesh or Petrel export.")
     inspect.add_argument("input", type=Path)
-    convert = commands.add_parser("convert", help="Convert a Gmsh mesh to GeoFV HDF5.")
+    convert = commands.add_parser("convert", help="Convert a mesh or Petrel export to GeoFV HDF5.")
     convert.add_argument("input", type=Path)
+    convert.add_argument("--output", type=Path)
     convert.add_argument("--length-unit", default="m")
+    convert.add_argument(
+        "--grid-mode",
+        choices=("native", "vertical-runs"),
+        default="native",
+        help="Petrel cell mode; ignored for mesh input.",
+    )
+    convert.add_argument(
+        "--initial-state",
+        choices=("none", "first"),
+        default="none",
+    )
+    convert.add_argument(
+        "--coordinate-mode",
+        choices=("map", "local"),
+        default="map",
+    )
+    convert.add_argument("--origin-x", type=float, default=0.0)
+    convert.add_argument("--origin-y", type=float, default=0.0)
+    convert.add_argument(
+        "--z-mode",
+        choices=("negative-depth", "positive-depth"),
+        default="negative-depth",
+    )
+    convert.add_argument("--tolerance", type=float, default=1.0e-6)
+    convert.add_argument(
+        "--property",
+        action="append",
+        default=[],
+        help="Additional GRDECL property path or discovered property keyword.",
+    )
+    convert.add_argument("--nnc", type=Path, help="Override the discovered NNC file.")
     validate = commands.add_parser("validate", help="Validate a GeoFV HDF5 model.")
     validate.add_argument("model", type=Path)
     export = commands.add_parser("export", help="Export a solver backend.")
@@ -51,12 +84,29 @@ def main(argv=None) -> int:
         return run()
     args = _parser().parse_args(argv)
     if args.command == "inspect":
-        _dump(inspect_mesh(args.input))
+        _dump(inspect_source(args.input))
         return 0
     if args.command == "convert":
-        options = ConversionOptions(length_unit=args.length_unit)
-        model = convert_mesh(args.input, options)
-        artifacts = save_fv_dataset(model, default_fv_dataset_path(args.input))
+        conversion_options = ConversionOptions(length_unit=args.length_unit)
+        petrel_options = PetrelImportOptions(
+            grid_mode=args.grid_mode.replace("-", "_"),
+            initial_state=args.initial_state,
+            coordinate_mode=args.coordinate_mode,
+            origin_x=args.origin_x,
+            origin_y=args.origin_y,
+            z_mode=args.z_mode,
+            tolerance=args.tolerance,
+            property_paths=tuple(Path(value) for value in args.property),
+            nnc_path=args.nnc,
+            conversion_options=conversion_options,
+        )
+        model = convert_source(
+            args.input,
+            gmsh_options=conversion_options,
+            petrel_options=petrel_options,
+        )
+        output = args.output or default_fv_dataset_path(args.input)
+        artifacts = save_fv_dataset(model, output)
         _dump(
             {
                 "model": str(artifacts.hdf5),

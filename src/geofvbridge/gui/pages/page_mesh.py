@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Signal
+import numpy as np
+from PySide6.QtCore import QTimer, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -20,10 +21,12 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSpinBox,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
+from ...boundary_selection import BoundarySelectionIndex
 from ...i18n import get_language
 from ...model import ExtrusionOptions
 from ..reports import format_tough_report
@@ -57,11 +60,15 @@ class ToughMeshPage(QWidget):
     preview_requested = Signal()
     generate_requested = Signal()
     config_changed = Signal()
+    preparation_changed = Signal()
+    selection_changed = Signal()
     open_requested = Signal(str)
 
-    VOLUME_MODE_MATERIAL = "material"
-    VOLUME_MODE_Z = "z_threshold"
-    VOLUME_MODE_TOP = "top_boundary"
+    SELECTION_MATERIAL = "material"
+    SELECTION_BOUNDARY = "boundary_group"
+    SELECTION_COORDINATE = "coordinate"
+    SELECTION_EXPOSED = "exposed_face"
+    SELECTION_GLOBAL = "global_plane"
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -71,8 +78,15 @@ class ToughMeshPage(QWidget):
         self.msh_path: Path | None = None
         self.vol_entries: dict[str, QLineEdit] = {}
         self.ahtx_entries: dict[str, QLineEdit] = {}
+        self.selection_index: BoundarySelectionIndex | None = None
+        self._selection_valid = False
         self._automatic_output_dir: Path | None = None
         self._suppress_config_changed = False
+        self._suppress_smart_default = False
+        self._selection_timer = QTimer(self)
+        self._selection_timer.setSingleShot(True)
+        self._selection_timer.setInterval(250)
+        self._selection_timer.timeout.connect(self.selection_changed)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -139,50 +153,108 @@ class ToughMeshPage(QWidget):
         ext.addWidget(self.combo_axis, 1, 1)
         ext.addWidget(QLabel(_t("等厚层数：", "Equal layers:")), 2, 0)
         ext.addWidget(self.layers_spin, 2, 1)
-        self.chk_auto_bound = QCheckBox(
-            _t("三维模式自动将 BOUND 设为无限体积单元", "Set BOUND to infinite volume in 3-D mode")
-        )
-        self.chk_auto_bound.setChecked(True)
-        self.chk_auto_bound.stateChanged.connect(self._update_bound_volume_state)
-        ext.addWidget(self.chk_auto_bound, 3, 0, 1, 2)
         layout.addWidget(self.extrude_group)
 
-        volume = QGroupBox(_t("Step 4：边界条件与体积修改", "Step 4: boundary and volume"))
+        volume = QGroupBox(_t("Step 4：无限体积单元设置", "Step 4: infinite-volume cells"))
         self.vol_layout = QGridLayout(volume)
-        self.combo_volume_mode = QComboBox()
-        self.combo_volume_mode.addItem(
-            _t("按材料修改体积", "Volume overrides by material"), self.VOLUME_MODE_MATERIAL
-        )
-        self.combo_volume_mode.addItem(
-            _t("按 Z 阈值定义无限体积", "Infinite volume by Z threshold"), self.VOLUME_MODE_Z
-        )
-        self.combo_volume_mode.addItem(
-            _t("自动选择全局顶部", "Automatic global top"), self.VOLUME_MODE_TOP
-        )
-        self.combo_volume_mode.currentIndexChanged.connect(self._update_volume_mode_ui)
+        self.combo_selection_mode = QComboBox()
+        self.combo_selection_mode.addItem(_t("请选择定义方式", "Select a definition method"), None)
+        self.combo_selection_mode.addItem(_t("按三维材料组", "By 3-D material group"), self.SELECTION_MATERIAL)
+        self.combo_selection_mode.addItem(_t("按二维边界面组", "By 2-D boundary face group"), self.SELECTION_BOUNDARY)
+        self.combo_selection_mode.addItem(_t("按坐标阈值", "By coordinate threshold"), self.SELECTION_COORDINATE)
+        self.combo_selection_mode.addItem(_t("自动识别顶部外露面", "Automatic exposed top faces"), self.SELECTION_EXPOSED)
+        self.combo_selection_mode.addItem(_t("全局最高水平面", "Global highest plane"), self.SELECTION_GLOBAL)
+        self.combo_volume_mode = self.combo_selection_mode
+        self.combo_selection_mode.currentIndexChanged.connect(self._update_volume_mode_ui)
         self.infinite_volume_edit = QLineEdit("1.0E50")
-        self.vol_layout.addWidget(QLabel(_t("定义模式：", "Definition mode:")), 0, 0)
-        self.vol_layout.addWidget(self.combo_volume_mode, 0, 1)
+        self.vol_layout.addWidget(QLabel(_t("定义方式：", "Definition method:")), 0, 0)
+        self.vol_layout.addWidget(self.combo_selection_mode, 0, 1)
         self.vol_layout.addWidget(QLabel(_t("无限体积：", "Infinite volume:")), 1, 0)
         self.vol_layout.addWidget(self.infinite_volume_edit, 1, 1)
-        self.vol_material_widget = QWidget()
-        self.vol_material_layout = QGridLayout(self.vol_material_widget)
-        self.vol_material_layout.setContentsMargins(0, 0, 0, 0)
-        self.vol_layout.addWidget(self.vol_material_widget, 2, 0, 1, 2)
-        self.vol_z_widget = QWidget()
-        z_layout = QFormLayout(self.vol_z_widget)
-        z_layout.setContentsMargins(0, 0, 0, 0)
-        self.entry_volume_z = QLineEdit()
-        z_layout.addRow(_t("质心 Z 下限：", "Centroid Z minimum:"), self.entry_volume_z)
-        self.vol_layout.addWidget(self.vol_z_widget, 3, 0, 1, 2)
-        self.vol_top_widget = QLabel(
-            _t("选择拥有全局最高外露面的单元。", "Select cells owning exposed faces at the global maximum.")
+        self.selection_stack = QStackedWidget()
+        self.selection_stack.addWidget(
+            QLabel(_t("请选择一种无限体积单元定义方式。", "Select one infinite-volume definition method."))
         )
-        self.vol_top_widget.setWordWrap(True)
-        self.vol_layout.addWidget(self.vol_top_widget, 4, 0, 1, 2)
+
+        material_widget = QWidget()
+        material_form = QFormLayout(material_widget)
+        material_form.setContentsMargins(0, 0, 0, 0)
+        self.combo_inactive_material = QComboBox()
+        material_form.addRow(_t("材料组：", "Material group:"), self.combo_inactive_material)
+        self.selection_stack.addWidget(material_widget)
+
+        boundary_widget = QWidget()
+        boundary_form = QFormLayout(boundary_widget)
+        boundary_form.setContentsMargins(0, 0, 0, 0)
+        self.combo_boundary_group = QComboBox()
+        boundary_form.addRow(_t("边界面组：", "Boundary face group:"), self.combo_boundary_group)
+        boundary_note = QLabel(
+            _t(
+                "二维面本身不写入 ELEME；选择它们相邻的唯一三维单元。",
+                "The 2-D faces are not ELEME records; their unique adjacent 3-D cells are selected.",
+            )
+        )
+        boundary_note.setWordWrap(True)
+        boundary_form.addRow(boundary_note)
+        self.selection_stack.addWidget(boundary_widget)
+
+        coordinate_widget = QWidget()
+        coordinate_form = QFormLayout(coordinate_widget)
+        coordinate_form.setContentsMargins(0, 0, 0, 0)
+        self.combo_coordinate_axis = QComboBox()
+        self.combo_coordinate_axis.addItems(["X", "Y", "Z"])
+        self.combo_coordinate_axis.setCurrentIndex(2)
+        self.combo_coordinate_operator = QComboBox()
+        self.combo_coordinate_operator.addItem("≥", "ge")
+        self.combo_coordinate_operator.addItem("≤", "le")
+        self.entry_coordinate_value = QLineEdit()
+        coordinate_form.addRow(_t("坐标轴：", "Coordinate axis:"), self.combo_coordinate_axis)
+        coordinate_form.addRow(_t("关系：", "Relation:"), self.combo_coordinate_operator)
+        coordinate_form.addRow(_t("阈值：", "Threshold:"), self.entry_coordinate_value)
+        self.selection_stack.addWidget(coordinate_widget)
+
+        exposed_widget = QWidget()
+        exposed_form = QFormLayout(exposed_widget)
+        exposed_form.setContentsMargins(0, 0, 0, 0)
+        self.combo_exposed_axis = QComboBox()
+        self.combo_exposed_axis.addItems(["X", "Y", "Z"])
+        self.combo_exposed_axis.setCurrentIndex(2)
+        self.combo_exposed_direction = QComboBox()
+        self.combo_exposed_direction.addItem(_t("正方向（顶部）", "Positive direction (top)"), 1)
+        self.combo_exposed_direction.addItem(_t("负方向（底部）", "Negative direction (bottom)"), -1)
+        self.entry_minimum_normal = QLineEdit("0.10")
+        exposed_form.addRow(_t("垂直轴：", "Vertical axis:"), self.combo_exposed_axis)
+        exposed_form.addRow(_t("方向：", "Direction:"), self.combo_exposed_direction)
+        exposed_form.addRow(_t("最小法向分量：", "Minimum normal component:"), self.entry_minimum_normal)
+        self.selection_stack.addWidget(exposed_widget)
+
+        global_widget = QWidget()
+        global_form = QFormLayout(global_widget)
+        global_form.setContentsMargins(0, 0, 0, 0)
+        self.combo_global_axis = QComboBox()
+        self.combo_global_axis.addItems(["X", "Y", "Z"])
+        self.combo_global_axis.setCurrentIndex(2)
+        self.entry_global_tolerance = QLineEdit()
+        self.entry_global_tolerance.setPlaceholderText(_t("留空＝自动", "Blank = automatic"))
+        global_form.addRow(_t("垂直轴：", "Vertical axis:"), self.combo_global_axis)
+        global_form.addRow(_t("坐标容差：", "Coordinate tolerance:"), self.entry_global_tolerance)
+        self.selection_stack.addWidget(global_widget)
+
+        self.vol_layout.addWidget(self.selection_stack, 2, 0, 1, 2)
+        self.selection_summary = QLabel(_t("求解器网格尚未就绪。", "The solver mesh is not ready."))
+        self.selection_summary.setWordWrap(True)
+        self.vol_layout.addWidget(self.selection_summary, 3, 0, 1, 2)
         layout.addWidget(volume)
 
-        ahtx = QGroupBox(_t("Step 5：热传导面积 AHTX", "Step 5: heat-transfer area AHTX"))
+        self.volume_override_group = QGroupBox(
+            _t("Step 5：普通材料体积覆盖（高级）", "Step 5: material volume overrides (advanced)")
+        )
+        self.volume_override_group.setCheckable(True)
+        self.volume_override_group.setChecked(False)
+        self.vol_material_layout = QGridLayout(self.volume_override_group)
+        layout.addWidget(self.volume_override_group)
+
+        ahtx = QGroupBox(_t("Step 6：热传导面积 AHTX", "Step 6: heat-transfer area AHTX"))
         self.ahtx_layout = QGridLayout(ahtx)
         self.chk_auto_ahtx = QCheckBox(
             _t("自动计算外露面 AHTX", "Automatically compute exposed-face AHTX")
@@ -202,18 +274,46 @@ class ToughMeshPage(QWidget):
         self.ahtx_layout.addWidget(self.combo_vertical_axis, 2, 1)
         layout.addWidget(ahtx)
 
-        actions = QGroupBox(_t("Step 6：预览并生成 MESH", "Step 6: preview and generate MESH"))
+        connections = QGroupBox(
+            _t(
+                "Step 7：Petrel 高级连接处理",
+                "Step 7: advanced Petrel connection handling",
+            )
+        )
+        connection_layout = QVBoxLayout(connections)
+        self.chk_allow_unrepresented_connections = QCheckBox(
+            _t(
+                "忽略没有 TOUGH 几何的正 TRAN/NNC 连接（近似模型）",
+                "Ignore positive TRAN/NNC without TOUGH geometry (approximate model)",
+            )
+        )
+        self.chk_allow_unrepresented_connections.setChecked(False)
+        connection_layout.addWidget(self.chk_allow_unrepresented_connections)
+        connection_warning = QLabel(
+            _t(
+                "警告：勾选后只导出具有安全几何的连接；未表示的正 TRAN/NNC "
+                "不会写入 CONNE，忽略数量将记录在 mesh_manifest.json 中。",
+                "Warning: only connections with safe geometry are exported. "
+                "Unrepresented positive TRAN/NNC are omitted from CONNE and audited "
+                "in mesh_manifest.json.",
+            )
+        )
+        connection_warning.setWordWrap(True)
+        connection_layout.addWidget(connection_warning)
+        layout.addWidget(connections)
+
+        actions = QGroupBox(_t("Step 8：预览并生成 MESH", "Step 8: preview and generate MESH"))
         action_layout = QVBoxLayout(actions)
         buttons = QHBoxLayout()
-        preview = QPushButton(_t("预览边界清单", "Preview boundary list"))
-        preview.clicked.connect(self.preview_requested)
+        self.btn_preview = QPushButton(_t("预览无限体积单元", "Preview infinite-volume cells"))
+        self.btn_preview.clicked.connect(self.preview_requested)
         self.btn_generate = QPushButton(_t("生成 MESH", "Generate MESH"))
         self.btn_generate.setObjectName("AccentButton")
         self.btn_generate.clicked.connect(self.generate_requested)
         self.open_folder_button = QPushButton(_t("打开输出目录", "Open output folder"))
         self.open_folder_button.setEnabled(False)
         self.open_folder_button.clicked.connect(lambda: self.open_requested.emit("mesh_folder"))
-        buttons.addWidget(preview)
+        buttons.addWidget(self.btn_preview)
         buttons.addWidget(self.btn_generate)
         buttons.addWidget(self.open_folder_button)
         buttons.addStretch()
@@ -226,29 +326,58 @@ class ToughMeshPage(QWidget):
         layout.addStretch()
         self._update_volume_mode_ui()
         self._connect_config_signals()
+        self.set_selection_ready(False)
 
     def _connect_config_signals(self) -> None:
-        for edit in (
-            self.output_edit,
-            self.entry_height,
-            self.infinite_volume_edit,
-            self.entry_volume_z,
-        ):
+        for edit in (self.output_edit, self.entry_height, self.infinite_volume_edit):
             edit.textChanged.connect(self._emit_config_changed)
-        for combo in (
-            self.combo_axis,
-            self.combo_volume_mode,
-            self.combo_ahtx_mode,
-            self.combo_vertical_axis,
-        ):
+        for combo in (self.combo_ahtx_mode, self.combo_vertical_axis):
             combo.currentIndexChanged.connect(self._emit_config_changed)
-        self.layers_spin.valueChanged.connect(self._emit_config_changed)
-        self.chk_auto_bound.stateChanged.connect(self._emit_config_changed)
+        for combo in (
+            self.combo_inactive_material,
+            self.combo_boundary_group,
+            self.combo_coordinate_axis,
+            self.combo_coordinate_operator,
+            self.combo_exposed_axis,
+            self.combo_exposed_direction,
+            self.combo_global_axis,
+        ):
+            combo.currentIndexChanged.connect(self._selection_control_changed)
+        for edit in (
+            self.entry_coordinate_value,
+            self.entry_minimum_normal,
+            self.entry_global_tolerance,
+        ):
+            edit.textChanged.connect(self._selection_text_changed)
+        self.entry_height.editingFinished.connect(self._emit_preparation_changed)
+        self.combo_axis.currentIndexChanged.connect(self._emit_preparation_changed)
+        self.layers_spin.valueChanged.connect(self._emit_preparation_changed)
+        self.volume_override_group.toggled.connect(self._emit_config_changed)
         self.chk_auto_ahtx.stateChanged.connect(self._emit_config_changed)
+        self.chk_allow_unrepresented_connections.stateChanged.connect(
+            self._emit_config_changed
+        )
 
     def _emit_config_changed(self, *_args) -> None:
         if not self._suppress_config_changed:
             self.config_changed.emit()
+
+    def _emit_preparation_changed(self, *_args) -> None:
+        if not self._suppress_config_changed:
+            self.config_changed.emit()
+            self.preparation_changed.emit()
+
+    def _selection_control_changed(self, *_args) -> None:
+        if not self._suppress_config_changed:
+            self.set_selection_ready(False)
+            self.config_changed.emit()
+            self.selection_changed.emit()
+
+    def _selection_text_changed(self, *_args) -> None:
+        if not self._suppress_config_changed:
+            self.set_selection_ready(False)
+            self.config_changed.emit()
+            self._selection_timer.start()
 
     def _browse_output(self):
         path = QFileDialog.getExistingDirectory(
@@ -272,7 +401,7 @@ class ToughMeshPage(QWidget):
                 self._automatic_output_dir = path.parent
             else:
                 self._automatic_output_dir = None
-        self._emit_config_changed()
+        self._emit_preparation_changed()
 
     def set_sources(
         self,
@@ -287,6 +416,8 @@ class ToughMeshPage(QWidget):
         self.msh_path = Path(msh_path) if msh_path and Path(msh_path).is_file() else None
         self.native_dimension = dimension
         self.materials = list(materials)
+        self.selection_index = None
+        self.chk_allow_unrepresented_connections.setChecked(False)
         h5_item = self.source_combo.model().item(0)
         msh_item = self.source_combo.model().item(1)
         if h5_item is not None:
@@ -299,12 +430,9 @@ class ToughMeshPage(QWidget):
         self.entry_height.setEnabled(is_2d)
         self.combo_axis.setEnabled(is_2d)
         self.layers_spin.setEnabled(is_2d)
-        self.chk_auto_bound.setEnabled(not is_2d and "BOUND" in self.materials)
         if is_2d:
-            self.chk_auto_bound.setChecked(False)
             ahtx_mode = "extrusion"
         else:
-            self.chk_auto_bound.setChecked("BOUND" in self.materials)
             ahtx_mode = "lateral"
         extrusion_item = self.combo_ahtx_mode.model().item(
             self.combo_ahtx_mode.findData("extrusion")
@@ -321,6 +449,13 @@ class ToughMeshPage(QWidget):
             )
         )
         self._populate_material_entries()
+        self.combo_selection_mode.setCurrentIndex(0)
+        self.combo_inactive_material.clear()
+        self.combo_boundary_group.clear()
+        self.set_selection_ready(False)
+        self.selection_summary.setText(
+            _t("正在准备求解器网格和边界索引……", "Preparing the solver mesh and boundary index…")
+        )
         self.set_output_ready(False)
         self._source_selected()
         self._suppress_config_changed = previous_suppression
@@ -332,6 +467,29 @@ class ToughMeshPage(QWidget):
         self._suppress_config_changed = previous_suppression
         source = self.source_path()
         self._automatic_output_dir = source.parent if source and path == source.parent else None
+
+    def set_solver_mesh_info(self, model) -> None:
+        """Show concise, file-specific information for the prepared solver mesh."""
+        points = np.asarray(model.points, dtype=float)
+        minimum = np.min(points, axis=0)
+        maximum = np.max(points, axis=0)
+        materials = len({cell.material for cell in model.cells})
+        self.info_label.setText(
+            _t(
+                f"{model.dimension}D；单元 {len(model.cells):,}；内部连接 "
+                f"{len(model.connections):,}；外边界面 {len(model.boundaries):,}；"
+                f"材料组 {materials:,}\n"
+                f"X：{minimum[0]:.6g} ～ {maximum[0]:.6g} m；"
+                f"Y：{minimum[1]:.6g} ～ {maximum[1]:.6g} m；"
+                f"Z：{minimum[2]:.6g} ～ {maximum[2]:.6g} m",
+                f"{model.dimension}D; {len(model.cells):,} cells; "
+                f"{len(model.connections):,} internal connections; "
+                f"{len(model.boundaries):,} exterior faces; {materials:,} material groups\n"
+                f"X: {minimum[0]:.6g} to {maximum[0]:.6g} m; "
+                f"Y: {minimum[1]:.6g} to {maximum[1]:.6g} m; "
+                f"Z: {minimum[2]:.6g} to {maximum[2]:.6g} m",
+            )
+        )
 
     @staticmethod
     def _clear_rows(layout: QGridLayout, first_row: int) -> None:
@@ -377,30 +535,94 @@ class ToughMeshPage(QWidget):
             ahtx.textChanged.connect(self._emit_config_changed)
             self.ahtx_layout.addWidget(ahtx, row + 3, 1)
             self.ahtx_entries[material] = ahtx
-        self._update_bound_volume_state()
-
     def _update_volume_mode_ui(self):
-        mode = self.combo_volume_mode.currentData()
-        self.vol_material_widget.setVisible(mode == self.VOLUME_MODE_MATERIAL)
-        self.vol_z_widget.setVisible(mode == self.VOLUME_MODE_Z)
-        self.vol_top_widget.setVisible(mode == self.VOLUME_MODE_TOP)
-        self._update_bound_volume_state()
+        mode = self.combo_selection_mode.currentData()
+        pages = {
+            self.SELECTION_MATERIAL: 1,
+            self.SELECTION_BOUNDARY: 2,
+            self.SELECTION_COORDINATE: 3,
+            self.SELECTION_EXPOSED: 4,
+            self.SELECTION_GLOBAL: 5,
+        }
+        self.selection_stack.setCurrentIndex(pages.get(mode, 0))
+        self._selection_control_changed()
 
-    def _update_bound_volume_state(self):
-        entry = self.vol_entries.get("BOUND")
-        if entry is None:
-            return
-        automatic = (
-            self.combo_volume_mode.currentData() == self.VOLUME_MODE_MATERIAL
-            and self.chk_auto_bound.isEnabled()
-            and self.chk_auto_bound.isChecked()
-        )
-        entry.setEnabled(not automatic)
-        if automatic:
-            entry.clear()
-            entry.setPlaceholderText(_t("由自动 BOUND 设置", "Set by automatic BOUND"))
+    @staticmethod
+    def _casefold_index(combo: QComboBox, name: str) -> int:
+        target = name.casefold()
+        for index in range(combo.count()):
+            if combo.itemText(index).casefold() == target:
+                return index
+        return -1
+
+    def set_selection_index(self, index: BoundarySelectionIndex) -> None:
+        """Install one prepared-model index and apply the documented smart default."""
+        previous_suppression = self._suppress_config_changed
+        self._suppress_config_changed = True
+        self.selection_index = index
+        self.combo_inactive_material.clear()
+        self.combo_inactive_material.addItems(list(index.material_cells))
+        self.combo_boundary_group.clear()
+        self.combo_boundary_group.addItems(list(index.boundary_groups))
+        bound = self._casefold_index(self.combo_inactive_material, "BOUND")
+        top = self._casefold_index(self.combo_boundary_group, "Top")
+        if bound >= 0:
+            self.combo_inactive_material.setCurrentIndex(bound)
+            self.combo_selection_mode.setCurrentIndex(
+                self.combo_selection_mode.findData(self.SELECTION_MATERIAL)
+            )
+        elif top >= 0:
+            self.combo_boundary_group.setCurrentIndex(top)
+            self.combo_selection_mode.setCurrentIndex(
+                self.combo_selection_mode.findData(self.SELECTION_BOUNDARY)
+            )
         else:
-            entry.setPlaceholderText("")
+            self.combo_selection_mode.setCurrentIndex(0)
+        self._suppress_config_changed = previous_suppression
+        self._update_volume_mode_ui()
+        self.set_selection_ready(self.combo_selection_mode.currentData() is not None)
+
+    def set_selection_ready(self, ready: bool) -> None:
+        self._selection_valid = bool(ready)
+        self.btn_preview.setEnabled(ready)
+        self.btn_generate.setEnabled(ready)
+
+    def set_selection_summary(self, report: dict | None = None, error: str | None = None) -> None:
+        if error:
+            self.selection_summary.setText(
+                _t(f"当前选择无效：{error}", f"The current selection is invalid: {error}")
+            )
+            self.set_selection_ready(False)
+            return
+        if not report:
+            self.selection_summary.setText(
+                _t("请选择一种无限体积单元定义方式。", "Select one infinite-volume definition method.")
+            )
+            self.set_selection_ready(False)
+            return
+        minimum = report.get("node_coordinate_min")
+        maximum = report.get("node_coordinate_max")
+        coordinate = ""
+        if minimum is not None and maximum is not None:
+            coordinate = _t(
+                f"；Z 节点范围：{float(minimum[2]):.6g} ～ {float(maximum[2]):.6g} m",
+                f"; node Z range: {float(minimum[2]):.6g} to {float(maximum[2]):.6g} m",
+            )
+        self.selection_summary.setText(
+            _t(
+                f"方式：{report.get('selection_label', '—')}；二维边界面：{int(report.get('boundary_face_count', 0)):,}；"
+                f"唯一三维单元：{int(report.get('inactive_count', 0)):,}{coordinate}",
+                f"Method: {report.get('selection_label', '—')}; 2-D boundary faces: {int(report.get('boundary_face_count', 0)):,}; "
+                f"unique 3-D cells: {int(report.get('inactive_count', 0)):,}{coordinate}",
+            )
+        )
+        self.set_selection_ready(True)
+
+    def set_task_busy(self, busy: bool, message: str = "") -> None:
+        self.btn_preview.setEnabled(not busy and self._selection_valid)
+        self.btn_generate.setEnabled(not busy and self._selection_valid)
+        if busy and message:
+            self.selection_summary.setText(message)
 
     def source_path(self) -> Path | None:
         return self.h5_path if self.source_combo.currentData() == "h5" else self.msh_path
@@ -419,14 +641,56 @@ class ToughMeshPage(QWidget):
             directions[self.combo_axis.currentIndex()], (total / layers,) * layers
         )
 
+    def inactive_selection(self) -> dict:
+        mode = self.combo_selection_mode.currentData()
+        if mode is None:
+            raise ValueError(
+                _t("请选择无限体积单元定义方式。", "Select an infinite-volume definition method.")
+            )
+        if mode == self.SELECTION_MATERIAL:
+            name = self.combo_inactive_material.currentText().strip()
+            if not name:
+                raise ValueError(_t("请选择材料组。", "Select a material group."))
+            return {"method": mode, "material": name}
+        if mode == self.SELECTION_BOUNDARY:
+            name = self.combo_boundary_group.currentText().strip()
+            if not name:
+                raise ValueError(_t("请选择边界面组。", "Select a boundary face group."))
+            return {"method": mode, "boundary_group": name}
+        if mode == self.SELECTION_COORDINATE:
+            value = self.entry_coordinate_value.text().strip()
+            if not value:
+                raise ValueError(_t("请输入坐标阈值。", "Enter a coordinate threshold."))
+            return {
+                "method": mode,
+                "axis": self.combo_coordinate_axis.currentIndex(),
+                "operator": self.combo_coordinate_operator.currentData(),
+                "value": float(value),
+            }
+        if mode == self.SELECTION_EXPOSED:
+            return {
+                "method": mode,
+                "axis": self.combo_exposed_axis.currentIndex(),
+                "direction": int(self.combo_exposed_direction.currentData()),
+                "minimum_normal": float(self.entry_minimum_normal.text()),
+            }
+        tolerance = self.entry_global_tolerance.text().strip()
+        return {
+            "method": self.SELECTION_GLOBAL,
+            "axis": self.combo_global_axis.currentIndex(),
+            "side": "max",
+            "tolerance": float(tolerance) if tolerance else None,
+        }
+
     def config(self) -> dict:
-        mode = self.combo_volume_mode.currentData()
         config: dict = {
             "boundary_mode": "auto",
             "infinite_volume": float(self.infinite_volume_edit.text()),
             "vertical_axis": self.combo_vertical_axis.currentIndex(),
-            "inactive_cells": [],
-            "inactive_materials": [],
+            "inactive_selection": self.inactive_selection(),
+            "allow_unrepresented_source_connections": (
+                self.chk_allow_unrepresented_connections.isChecked()
+            ),
             "ahtx": {
                 "mode": (
                     self.combo_ahtx_mode.currentData()
@@ -442,20 +706,12 @@ class ToughMeshPage(QWidget):
                 },
             },
         }
-        if mode == self.VOLUME_MODE_MATERIAL:
+        if self.volume_override_group.isChecked():
             config["volume_overrides"] = {
                 name: float(edit.text())
                 for name, edit in self.vol_entries.items()
                 if edit.text().strip()
             }
-            if self.chk_auto_bound.isChecked() and self.chk_auto_bound.isEnabled():
-                config["inactive_materials"] = ["BOUND"]
-        elif mode == self.VOLUME_MODE_Z:
-            if not self.entry_volume_z.text().strip():
-                raise ValueError(_t("请输入 Z 阈值。", "Enter a Z threshold."))
-            config["inactive_z_min"] = float(self.entry_volume_z.text())
-        elif mode == self.VOLUME_MODE_TOP:
-            config["inactive_top"] = True
         return config
 
     def show_json(self, value) -> None:

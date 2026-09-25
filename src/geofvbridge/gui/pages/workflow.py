@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPlainTextEdit,
+    QProgressBar,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -79,7 +80,7 @@ class ImportPage(QWidget):
             _path_row(self.input_edit, self._browse_input, ".msh / .geofv.h5"),
         )
         buttons = QHBoxLayout()
-        inspect = QPushButton(_t("检查 MSH 并显示有限元网格", "Inspect MSH and display FE mesh"))
+        inspect = QPushButton(_t("检查输入并显示网格信息", "Inspect input and display grid information"))
         inspect.setObjectName("AccentButton")
         inspect.clicked.connect(lambda: self.inspect_requested.emit(self.input_edit.text().strip()))
         load = QPushButton(_t("载入已有 FV 数据集", "Load existing FV dataset"))
@@ -90,6 +91,11 @@ class ImportPage(QWidget):
         buttons.addWidget(load)
         form.addRow(buttons)
         open_buttons = QHBoxLayout()
+        self.petrel_folder_button = QPushButton(
+            _t("选择 Petrel 文件夹", "Select Petrel folder")
+        )
+        self.petrel_folder_button.clicked.connect(self._browse_petrel_folder)
+        open_buttons.addWidget(self.petrel_folder_button)
         self.open_input_folder_button = QPushButton(_t("打开所在目录", "Open containing folder"))
         self.open_input_folder_button.setEnabled(False)
         self.open_input_folder_button.clicked.connect(
@@ -98,6 +104,31 @@ class ImportPage(QWidget):
         open_buttons.addWidget(self.open_input_folder_button)
         form.addRow(open_buttons)
         layout.addWidget(source)
+
+        petrel = QGroupBox(_t("Petrel 转换选项", "Petrel conversion options"))
+        petrel_form = QFormLayout(petrel)
+        self.grid_mode_combo = QComboBox()
+        self.grid_mode_combo.addItem(_t("原生活动单元", "Native active cells"), "native")
+        self.grid_mode_combo.addItem(_t("连续垂向层合并", "Merge vertical runs"), "vertical_runs")
+        self.initial_state_combo = QComboBox()
+        self.initial_state_combo.addItem(_t("不读取", "Do not read"), "none")
+        self.initial_state_combo.addItem(_t("首个状态", "First state"), "first")
+        self.coordinate_mode_combo = QComboBox()
+        self.coordinate_mode_combo.addItem(_t("地图坐标", "Map coordinates"), "map")
+        self.coordinate_mode_combo.addItem(_t("局部坐标", "Local coordinates"), "local")
+        self.z_mode_combo = QComboBox()
+        self.z_mode_combo.addItem(_t("地下为负值", "Negative depth"), "negative-depth")
+        self.z_mode_combo.addItem(_t("深度为正值", "Positive depth"), "positive-depth")
+        self.origin_x_edit = QLineEdit("0")
+        self.origin_y_edit = QLineEdit("0")
+        petrel_form.addRow(_t("网格模式：", "Grid mode:"), self.grid_mode_combo)
+        petrel_form.addRow(_t("初始状态：", "Initial state:"), self.initial_state_combo)
+        petrel_form.addRow(_t("XY 坐标：", "XY coordinates:"), self.coordinate_mode_combo)
+        petrel_form.addRow(_t("X 原点：", "X origin:"), self.origin_x_edit)
+        petrel_form.addRow(_t("Y 原点：", "Y origin:"), self.origin_y_edit)
+        petrel_form.addRow(_t("Z 坐标：", "Z coordinates:"), self.z_mode_combo)
+        self.petrel_options_group = petrel
+        layout.addWidget(petrel)
 
         self.info = QPlainTextEdit()
         self.info.setReadOnly(True)
@@ -112,7 +143,15 @@ class ImportPage(QWidget):
             self,
             _t("选择 MSH 或 FV 数据集", "Select MSH or FV dataset"),
             "",
-            "Gmsh/FV (*.msh *.geofv.h5 *.h5);;All files (*)",
+            "Gmsh/Petrel/FV (*.msh *.EGRID *.egrid *.geofv.h5 *.h5);;All files (*)",
+        )
+        if path:
+            self.input_edit.setText(path)
+
+    def _browse_petrel_folder(self):
+        path = QFileDialog.getExistingDirectory(
+            self,
+            _t("选择包含 EGRID 的 Petrel 文件夹", "Select a Petrel folder containing EGRID"),
         )
         if path:
             self.input_edit.setText(path)
@@ -124,11 +163,34 @@ class ImportPage(QWidget):
 
     def _update_input_actions(self, text: str) -> None:
         path = Path(text.strip()) if text.strip() else None
-        exists = bool(path and path.is_file())
+        exists = bool(path and path.exists())
         lower = path.name.lower() if path else ''
-        self.inspect_button.setEnabled(exists and lower.endswith('.msh'))
-        self.load_button.setEnabled(exists and lower.endswith(('.geofv.h5', '.h5')))
+        petrel = bool(
+            path
+            and (
+                (path.is_file() and lower.endswith(".egrid"))
+                or (
+                    path.is_dir()
+                    and (list(path.glob("*.EGRID")) or list(path.glob("*.egrid")))
+                )
+            )
+        )
+        self.inspect_button.setEnabled(exists and (lower.endswith('.msh') or petrel))
+        self.load_button.setEnabled(
+            bool(path and path.is_file() and lower.endswith(('.geofv.h5', '.h5')))
+        )
+        self.petrel_options_group.setEnabled(petrel)
         self.open_input_folder_button.setEnabled(exists)
+
+    def petrel_options(self) -> dict[str, object]:
+        return {
+            "grid_mode": str(self.grid_mode_combo.currentData()),
+            "initial_state": str(self.initial_state_combo.currentData()),
+            "coordinate_mode": str(self.coordinate_mode_combo.currentData()),
+            "origin_x": float(self.origin_x_edit.text()),
+            "origin_y": float(self.origin_y_edit.text()),
+            "z_mode": str(self.z_mode_combo.currentData()),
+        }
 
     def set_inspection(self, inspection: dict) -> None:
         self.inspection = inspection
@@ -150,6 +212,7 @@ class DatasetPage(QWidget):
     """Stage 2: compute and persist the native-dimensional FV dataset."""
 
     generate_requested = Signal()
+    cancel_requested = Signal()
     open_requested = Signal(str)
 
     def __init__(self, parent=None):
@@ -172,6 +235,18 @@ class DatasetPage(QWidget):
         row.addWidget(self.generate_button)
         row.addStretch()
         layout.addLayout(row)
+        progress_row = QHBoxLayout()
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.progress_label = QLabel("")
+        self.cancel_button = QPushButton(_t("取消转换", "Cancel conversion"))
+        self.cancel_button.setEnabled(False)
+        self.cancel_button.clicked.connect(self.cancel_requested)
+        progress_row.addWidget(self.progress_bar, 1)
+        progress_row.addWidget(self.progress_label)
+        progress_row.addWidget(self.cancel_button)
+        layout.addLayout(progress_row)
         open_row = QHBoxLayout()
         self.open_folder_button = QPushButton(_t("打开输出目录", "Open output folder"))
         self.open_folder_button.setEnabled(False)
@@ -192,10 +267,23 @@ class DatasetPage(QWidget):
     def set_generation_enabled(self, enabled: bool) -> None:
         self.generate_button.setEnabled(enabled)
 
+    def set_conversion_running(self, running: bool) -> None:
+        self.generate_button.setEnabled(not running)
+        self.cancel_button.setEnabled(running)
+        if not running:
+            self.progress_label.clear()
+
+    def set_progress(self, percent: int, stage: str) -> None:
+        self.progress_bar.setValue(max(0, min(100, percent)))
+        self.progress_label.setText(stage)
+
     def clear_model(self) -> None:
         self.output.clear()
         self.open_folder_button.setEnabled(False)
         self.generate_button.setEnabled(False)
+        self.cancel_button.setEnabled(False)
+        self.progress_bar.setValue(0)
+        self.progress_label.clear()
 
 
 class SolverSelectionPage(QWidget):

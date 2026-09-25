@@ -4,7 +4,8 @@
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.21522917.svg)](https://doi.org/10.5281/zenodo.21522917)
 
 GeoFVBridge is a solver-independent preprocessing toolkit that converts
-conforming Gmsh meshes into cell-centred finite-volume topology and geometry.
+conforming Gmsh meshes or Petrel-exported ECLIPSE corner-point grids into
+cell-centred finite-volume topology and geometry.
 It provides a Python API, command-line interface, staged desktop GUI, a
 versioned HDF5 interchange format, and a TOUGH2/ECO2M export backend.
 
@@ -13,6 +14,9 @@ geometric measures and centroids, face normals, centroid-line intersection
 distances, gravity projections, and non-orthogonality diagnostics. Supported
 first-order cells include triangles, quadrilaterals, tetrahedra, wedges,
 hexahedra, pyramids, voxels, and conforming mixtures of those families.
+
+**Current release: 1.1.2.** See the [cumulative release notes](docs/releases/v1.1.2.md)
+for the changes since 1.0.1, migration guidance, and a Chinese comparison.
 
 ## Requirements
 
@@ -46,6 +50,20 @@ geofvbridge validate examples/eg_3d004/2_turn/eg3d004.geofv.h5
 geofvbridge gui
 ```
 
+For a Petrel ECLIPSE export, use an EGRID file with optional matching INIT,
+property GRDECL, grid NNC GRDECL, and UNRST files:
+
+```powershell
+geofvbridge inspect reservoir.EGRID
+geofvbridge convert reservoir.EGRID
+geofvbridge convert reservoir.EGRID --grid-mode vertical-runs
+```
+
+Native mode preserves active corner-point cells. `vertical-runs` merges each
+continuous active K run in an I/J column, retains source membership, and
+records volume, pore-volume, and source-connection conservation diagnostics.
+This reads simulator exports; it does not open proprietary Petrel projects.
+
 Running `geofvbridge` or `python -m geofvbridge` without arguments also opens
 the GUI. Each conversion writes three reusable artifacts beside the input:
 
@@ -76,6 +94,18 @@ The GUI exposes the same settings on the TOUGH MESH page.
 - Solver preparation can extrude triangles to wedges and quads to hexahedra.
 - High-order, arbitrary-polyhedral, hanging-node, and non-conforming meshes are
   rejected with diagnostics rather than silently modified.
+- HDF5 schema 1.2 stores Petrel fields, cell identities, and source connections;
+  the reader also accepts schema 1.0 and 1.1 datasets.
+- Positive Petrel TRAN/NNC connections without a complete FV interface block
+  TOUGH export by default. The advanced
+  `allow_unrepresented_source_connections` option explicitly permits an
+  approximate export that omits them and records the omission in the manifest.
+- TOUGH `CONNE.ISOT` is selected from the connection angle to gravity:
+  45–135 degrees inclusive uses 1 (horizontal); other angles use 3 (vertical).
+  Configure `ROCKS.PER(1)` and `PER(3)` accordingly. This assumes horizontal
+  isotropy and does not correct non-orthogonal flux discretization.
+- Large GUI conversions run in a cancellable process with progress reporting.
+  Solver preparation, boundary previews, and MESH exports use background workers.
 
 See [the architecture guide](docs/architecture.md) for geometry conventions,
 the HDF5 schema, validation rules, and backend behavior. See
@@ -101,4 +131,6 @@ reference cases.
 Citation metadata is available in [`CITATION.cff`](CITATION.cff). The archived
 GeoFVBridge 1.0.1 snapshot is available at
 [doi:10.5281/zenodo.21522918](https://doi.org/10.5281/zenodo.21522918).
+That DOI identifies 1.0.1, not this release; use the GitHub 1.1.2 release link
+when referring specifically to the new version.
 GeoFVBridge is released under the [MIT License](LICENSE).

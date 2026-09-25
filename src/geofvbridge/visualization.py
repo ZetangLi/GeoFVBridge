@@ -85,6 +85,9 @@ def _boundary_overlay(pv, model: FVModel):
         owner_cell_ids.append(boundary.cell)
     overlay = pv.PolyData(model.points, faces=np.asarray(faces, dtype=int))
     overlay.cell_data['boundary_id'] = np.asarray(boundary_ids, dtype=int)
+    overlay.cell_data['face_id'] = np.asarray(
+        [boundary.face for boundary in model.boundaries], dtype=int
+    )
     overlay.cell_data['owner_cell_id'] = np.asarray(owner_cell_ids, dtype=int)
     return overlay
 
@@ -145,7 +148,7 @@ def filter_visualization_bundle(
     grid = _extract_grid_cells(bundle.grid, visible)
     overlay = bundle.overlay
     if overlay is not None:
-        if mode in {'boundary', 'boundaries'}:
+        if mode in {'boundary', 'boundaries', 'tough_inactive'}:
             owners = np.asarray(overlay.cell_data.get('owner_cell_id', ()), dtype=int)
             overlay = overlay.extract_cells(np.flatnonzero(np.isin(owners, tuple(visible))))
         elif mode in {'connection', 'connections', 'fv_topology'}:

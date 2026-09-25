@@ -22,7 +22,7 @@ from ..api import to_pyvista
 from ..converter import cell_type_dimension
 from ..i18n import get_language, tr
 from ..styles import APP_NAME, Colors, Fonts, Sizes
-from ..visualization import filter_visualization_bundle
+from ..visualization import VisualizationBundle, filter_visualization_bundle
 
 FIELD_TITLE_KEYS = {
     "material": "common.lithology_distribution",
@@ -110,6 +110,7 @@ class Visualizer(QWidget):
         self._annotations = {}
         self._model = None
         self._inactive_cells = set()
+        self._inactive_face_ids = set()
         self._bundle = None
         self._bundle_cache = {}
         self._full_mesh = None
@@ -442,6 +443,7 @@ class Visualizer(QWidget):
         self._total_cells = 0
         self._field_name = None
         self._inactive_cells.clear()
+        self._inactive_face_ids.clear()
         self._clear_material_filter()
         self._set_available_modes(set())
         if self.plotter:
@@ -585,18 +587,48 @@ class Visualizer(QWidget):
         self._origin_mode = "direct_3d" if dimension == 3 else "native_2d"
         self._render_fe_mode(initial_mode)
 
-    def display_model(self, model, mode="material", inactive_cells=None):
+    @staticmethod
+    def _selected_boundary_overlay(model, face_ids):
+        selected = {int(value) for value in face_ids}
+        if not selected:
+            return pv.PolyData()
+        owners = {boundary.face: boundary.cell for boundary in model.boundaries}
+        faces: list[int] = []
+        owner_ids: list[int] = []
+        kept_face_ids: list[int] = []
+        for face_id in selected:
+            owner = owners.get(face_id)
+            if owner is None:
+                continue
+            nodes = model.faces[face_id].nodes
+            faces.extend((len(nodes), *nodes))
+            owner_ids.append(owner)
+            kept_face_ids.append(face_id)
+        overlay = pv.PolyData(model.points, faces=np.asarray(faces, dtype=int))
+        overlay.cell_data["owner_cell_id"] = np.asarray(owner_ids, dtype=int)
+        overlay.cell_data["face_id"] = np.asarray(kept_face_ids, dtype=int)
+        return overlay
+
+    def display_model(
+        self,
+        model,
+        mode="material",
+        inactive_cells=None,
+        inactive_face_ids=None,
+    ):
         """Display an FVModel and its optional topology/semantic overlay."""
         mode = mode.lower().replace("-", "_")
         if mode not in MODEL_MODES:
             raise ValueError(f"Unknown visualization mode: {mode}")
         self._set_available_modes(MODEL_MODES)
         inactive = set(inactive_cells or ())
-        if model is not self._model or inactive != self._inactive_cells:
+        inactive_faces = set(inactive_face_ids or ())
+        if model is not self._model:
             self._bundle_cache.clear()
         self._model = model
         self._full_mesh = None
         self._inactive_cells = inactive
+        self._inactive_face_ids = inactive_faces
         self._display_mode = mode
         self._field_name = mode
         self._sync_mode_combo(mode)
@@ -621,8 +653,41 @@ class Visualizer(QWidget):
             return
         full_bundle = self._bundle_cache.get(mode)
         if full_bundle is None:
-            full_bundle = to_pyvista(model, mode, inactive_cells=self._inactive_cells)
+            if mode == "tough_inactive":
+                reusable = next(
+                    (
+                        cached
+                        for cached in self._bundle_cache.values()
+                        if cached.grid is not None
+                        and cached.grid.n_cells == len(model.cells)
+                    ),
+                    None,
+                )
+                if reusable is not None:
+                    full_bundle = VisualizationBundle(
+                        reusable.grid,
+                        scalars="tough_inactive",
+                        categorical=True,
+                    )
+                else:
+                    full_bundle = to_pyvista(
+                        model,
+                        mode,
+                        inactive_cells=self._inactive_cells,
+                    )
+            else:
+                full_bundle = to_pyvista(model, mode, inactive_cells=self._inactive_cells)
             self._bundle_cache[mode] = full_bundle
+        if mode == "tough_inactive":
+            cell_ids = np.asarray(full_bundle.grid.cell_data["cell_id"], dtype=int)
+            full_bundle.grid.cell_data["tough_inactive"] = np.isin(
+                cell_ids,
+                tuple(self._inactive_cells),
+            ).astype(int)
+            full_bundle.overlay = self._selected_boundary_overlay(
+                model,
+                self._inactive_face_ids,
+            )
         bundle = filter_visualization_bundle(
             full_bundle,
             self._visible_model_cell_ids(),
@@ -660,7 +725,12 @@ class Visualizer(QWidget):
         if self.plotter is not None and hasattr(self.plotter, "camera_position"):
             camera_position = self.plotter.camera_position
         if self._model is not None:
-            self.display_model(self._model, self._display_mode, self._inactive_cells)
+            self.display_model(
+                self._model,
+                self._display_mode,
+                self._inactive_cells,
+                self._inactive_face_ids,
+            )
         elif self._full_mesh is not None:
             self._mesh = self._filtered_fe_mesh()
             self._render_fe_mode(self._display_mode)
@@ -761,6 +831,26 @@ class Visualizer(QWidget):
             else:
                 kwargs["color"] = Colors.ACCENT
             plotter.add_mesh(bundle.grid, **kwargs)
+        elif mode == "tough_inactive":
+            plotter.add_mesh(
+                bundle.grid,
+                scalars="tough_inactive",
+                cmap=["#707080", Colors.ERROR],
+                clim=(-0.5, 1.5),
+                annotations={0: "Active", 1: "TOUGH inactive"},
+                scalar_bar_args={"title": "TOUGH"},
+                show_edges=True,
+                edge_color="#333333",
+                line_width=0.5,
+            )
+            if bundle.overlay.n_points:
+                plotter.add_mesh(
+                    bundle.overlay,
+                    color="#FFD54F",
+                    opacity=0.9,
+                    show_edges=True,
+                    edge_color="#5D4A00",
+                )
         else:
             plotter.add_mesh(
                 bundle.grid,
@@ -897,7 +987,12 @@ class Visualizer(QWidget):
             return
 
         if self._model is not None:
-            self.display_model(self._model, mode, self._inactive_cells)
+            self.display_model(
+                self._model,
+                mode,
+                self._inactive_cells,
+                self._inactive_face_ids,
+            )
             return
 
         if self._full_mesh is not None:

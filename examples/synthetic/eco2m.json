@@ -1,0 +1,18 @@
+{
+  "boundary_mode": "auto",
+  "boundaries": {
+    "TOP": {
+      "kind": "state",
+      "primary": [101325.0, 0.0, 0.0, 20.0]
+    },
+    "BOTTOM": {"kind": "no_flow"},
+    "SIDE": {"kind": "no_flow"}
+  },
+  "initial_conditions": {
+    "default": [101325.0, 0.0, 0.0, 20.0]
+  },
+  "flow": {
+    "multi": [3, 4, 4, 6],
+    "times": [1.0, 3600.0, 7200.0]
+  }
+}

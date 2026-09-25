@@ -13,6 +13,13 @@ from .backends import get_backend, list_backends
 from .converter import cell_type_dimension, convert_file
 from .model import ConversionOptions, ExtrusionOptions, FVModel
 from .persistence import read_model, write_model
+from .petrel import (
+    CancelCallback,
+    PetrelImportOptions,
+    ProgressCallback,
+    convert_petrel,
+    inspect_petrel,
+)
 from .solver import prepare_solver_model as _prepare_solver_model
 from .validation import validate_model as _validate_model
 from .visualization import to_pyvista as _to_pyvista
@@ -51,6 +58,7 @@ def inspect_mesh(path: str | Path) -> dict:
         if len(points) and points.shape[1] > index
     }
     return {
+        "input_kind": "mesh",
         "path": str(path.resolve()),
         "points": len(mesh.points),
         "dimension": max(dimensions) if dimensions else None,
@@ -58,6 +66,21 @@ def inspect_mesh(path: str | Path) -> dict:
         "physical_groups": physical_groups,
         "coordinate_bounds": bounds,
     }
+
+
+def _is_petrel_source(path: Path) -> bool:
+    if path.is_file():
+        return path.suffix.upper() == ".EGRID"
+    if path.is_dir():
+        return bool(list(path.glob("*.EGRID")) or list(path.glob("*.egrid")))
+    return False
+
+
+def inspect_source(path: str | Path) -> dict:
+    """Inspect either a meshio-supported mesh or a Petrel export."""
+
+    path = Path(path)
+    return inspect_petrel(path) if _is_petrel_source(path) else inspect_mesh(path)
 
 
 def convert_mesh(
@@ -69,9 +92,48 @@ def convert_mesh(
     return convert_file(path, options, extrusion)
 
 
+def convert_source(
+    source: str | Path,
+    *,
+    gmsh_options: ConversionOptions | None = None,
+    petrel_options: PetrelImportOptions | None = None,
+    extrusion: ExtrusionOptions | None = None,
+    progress_callback: ProgressCallback | None = None,
+    cancel_check: CancelCallback | None = None,
+) -> FVModel:
+    """Dispatch a mesh or Petrel export through its native conversion route."""
+
+    path = Path(source)
+    if _is_petrel_source(path):
+        return convert_petrel(
+            path,
+            petrel_options,
+            progress=progress_callback,
+            cancelled=cancel_check,
+        )
+    if cancel_check is not None and cancel_check():
+        from .petrel import PetrelImportCancelled
+
+        raise PetrelImportCancelled("Conversion cancelled before mesh reading.")
+    if progress_callback is not None:
+        progress_callback("mesh_conversion", 0, 1)
+    model = convert_mesh(path, gmsh_options, extrusion=extrusion)
+    if progress_callback is not None:
+        progress_callback("mesh_conversion", 1, 1)
+    return model
+
+
 def default_fv_dataset_path(input_path: str | Path) -> Path:
     """Return the side-by-side dataset path derived from an input file name."""
     path = Path(input_path)
+    if path.is_dir() or path.suffix.upper() == ".EGRID":
+        from .petrel import PetrelInputFiles
+
+        files = PetrelInputFiles.discover(path)
+        stem = files.egrid.stem
+        if stem.upper().endswith("_GRID"):
+            stem = stem[:-5]
+        return files.egrid.with_name(stem + FV_DATASET_SUFFIX)
     if path.name.lower().endswith(FV_DATASET_SUFFIX):
         return path
     return path.with_name(path.stem + FV_DATASET_SUFFIX)

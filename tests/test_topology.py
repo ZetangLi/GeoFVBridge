@@ -5,9 +5,39 @@ import numpy as np
 
 from geofvbridge.converter import convert_meshio
 from geofvbridge.extrusion import extrude_meshio
+from geofvbridge.model import ValidationIssue, ValidationReport
 
 
 class TopologyTests(unittest.TestCase):
+    def test_validation_report_uses_stable_hash_deduplication(self):
+        report = ValidationReport(
+            [ValidationIssue("warning", "existing", "Existing warning.")]
+        )
+        report.add("warning", "existing", "Existing warning.")
+        for entity_id in range(1000):
+            report.add("warning", "many", "Warning.", "face", entity_id)
+        self.assertEqual(len(report.issues), 1001)
+        self.assertEqual(len(report._issue_keys), 1001)
+
+    def test_nonplanar_faces_are_aggregated_in_one_warning(self):
+        points = np.array(
+            [
+                [0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0],
+                [0, 0, 1], [1, 0, 1], [1, 1, 1.2], [0, 1, 1],
+                [2, 0, 0], [3, 0, 0], [3, 1, 0], [2, 1, 0],
+                [2, 0, 1], [3, 0, 1], [3, 1, 1.2], [2, 1, 1],
+            ],
+            dtype=float,
+        )
+        model = convert_meshio(
+            meshio.Mesh(points, [("hexahedron", np.arange(16).reshape(2, 8))])
+        )
+        issues = [issue for issue in model.report.warnings if issue.code == "nonplanar_face"]
+        diagnostic = model.metadata["diagnostics"]["nonplanar_faces"]
+        self.assertEqual(len(issues), 1)
+        self.assertGreater(diagnostic["count"], 1)
+        self.assertEqual(model.summary()["face_nonplanarity_count"], diagnostic["count"])
+
     def test_two_tetrahedra_share_one_face(self):
         points = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1], [0, 0, -1.0]])
         cells = np.array([[0, 1, 2, 3], [0, 2, 1, 4]])

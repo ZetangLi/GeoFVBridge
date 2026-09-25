@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from ..model import FVModel
-from .mesh_view import SolverMeshView
+from .legacy import LegacyMeshView
 
 
 @dataclass(slots=True)
@@ -21,7 +21,7 @@ class SolverMeshContext:
     config: dict[str, Any]
     manifest: dict[str, Any]
     material_map: dict[str, str]
-    mesh_view: SolverMeshView
+    legacy: LegacyMeshView
 
     @classmethod
     def from_export(
@@ -45,5 +45,5 @@ class SolverMeshContext:
             config=dict(config),
             manifest=dict(manifest),
             material_map=material_map,
-            mesh_view=SolverMeshView(model, material_map=material_map),
+            legacy=LegacyMeshView(model, material_map=material_map),
         )

@@ -12,17 +12,19 @@ import numpy as np
 from .model import (
     Boundary,
     Cell,
+    CellField,
     Connection,
     ConversionOptions,
     Face,
     FVModel,
     Source,
+    SourceConnection,
     ValidationIssue,
     ValidationReport,
 )
 
-SCHEMA_VERSION = "1.1"
-READABLE_SCHEMA_VERSIONS = {"1.0", SCHEMA_VERSION}
+SCHEMA_VERSION = "1.2"
+READABLE_SCHEMA_VERSIONS = {"1.0", "1.1", SCHEMA_VERSION}
 
 
 def _ragged(rows):
@@ -69,6 +71,44 @@ def write_model(model: FVModel, path: str | Path, summary_path: str | Path | Non
         cells.create_dataset(
             "source_id", data=[cell.source_id if cell.source_id is not None else -1 for cell in model.cells]
         )
+        cells.create_dataset(
+            "source_kind", data=_strings(cell.source_kind or "" for cell in model.cells)
+        )
+        cells.create_dataset(
+            "source_global_index",
+            data=[
+                cell.source_global_index if cell.source_global_index is not None else -1
+                for cell in model.cells
+            ],
+        )
+        cells.create_dataset(
+            "active_index",
+            data=[cell.active_index if cell.active_index is not None else -1 for cell in model.cells],
+        )
+        cells.create_dataset(
+            "ijk",
+            data=[
+                cell.ijk if cell.ijk is not None else (-1, -1, -1)
+                for cell in model.cells
+            ],
+        )
+        member_values, member_offsets = _ragged(cell.source_members for cell in model.cells)
+        cells.create_dataset("source_members", data=member_values)
+        cells.create_dataset("source_member_offsets", data=member_offsets)
+
+        cell_fields = handle.require_group("cell_fields")
+        for name, item in sorted(model.cell_fields.items()):
+            if len(item.values) != len(model.cells):
+                raise ValueError(
+                    f"Cell field {name!r} has {len(item.values)} values for {len(model.cells)} cells."
+                )
+            field_group = cell_fields.require_group(name)
+            field_group.create_dataset("values", data=np.asarray(item.values))
+            field_group.attrs["unit"] = item.unit
+            field_group.attrs["source"] = item.source
+            field_group.attrs["keyword"] = item.keyword
+            field_group.attrs["aggregation"] = item.aggregation
+            field_group.attrs["role"] = item.role
 
         flat, offsets = _ragged(face.nodes for face in model.faces)
         faces = handle.require_group("faces")
@@ -109,6 +149,56 @@ def write_model(model: FVModel, path: str | Path, summary_path: str | Path | Non
         connections.create_dataset(
             "intersection",
             data=np.asarray([item.intersection for item in model.connections], dtype=float).reshape((-1, 3)),
+        )
+        connections.create_dataset(
+            "enabled", data=np.asarray([item.enabled for item in model.connections], dtype=np.uint8)
+        )
+        connections.create_dataset(
+            "source_connection_id",
+            data=[
+                item.source_connection_id if item.source_connection_id is not None else -1
+                for item in model.connections
+            ],
+        )
+
+        source_connections = handle.require_group("source_connections")
+        for name in ("id", "cell1", "cell2", "source_count"):
+            source_connections.create_dataset(
+                name, data=[getattr(item, name) for item in model.source_connections]
+            )
+        source_connections.create_dataset(
+            "kind", data=_strings(item.kind for item in model.source_connections)
+        )
+        source_connections.create_dataset(
+            "direction", data=_strings(item.direction or "" for item in model.source_connections)
+        )
+        source_connections.create_dataset(
+            "transmissibility",
+            data=[item.transmissibility for item in model.source_connections],
+        )
+        source_connections.create_dataset(
+            "flow_connected",
+            data=np.asarray(
+                [item.flow_connected for item in model.source_connections], dtype=np.uint8
+            ),
+        )
+        source_connections.create_dataset(
+            "matched_connection",
+            data=[
+                item.matched_connection if item.matched_connection is not None else -1
+                for item in model.source_connections
+            ],
+        )
+        source_connections.create_dataset(
+            "geometry_status",
+            data=_strings(item.geometry_status for item in model.source_connections),
+        )
+        source_connections.create_dataset(
+            "metadata_json",
+            data=_strings(
+                json.dumps(item.metadata, ensure_ascii=False, default=str)
+                for item in model.source_connections
+            ),
         )
 
         boundaries = handle.require_group("boundaries")
@@ -162,10 +252,43 @@ def read_model(path: str | Path) -> FVModel:
         cell_materials = [_decode(value) for value in cells_group["material"][...]]
         physical_tags = np.asarray(cells_group["physical_tag"], dtype=int)
         source_ids = np.asarray(cells_group["source_id"], dtype=int)
+        source_kinds = (
+            [_decode(value) for value in cells_group["source_kind"][...]]
+            if "source_kind" in cells_group
+            else [""] * len(cell_ids)
+        )
+        source_global_indices = (
+            np.asarray(cells_group["source_global_index"], dtype=int)
+            if "source_global_index" in cells_group
+            else np.full(len(cell_ids), -1, dtype=int)
+        )
+        active_indices = (
+            np.asarray(cells_group["active_index"], dtype=int)
+            if "active_index" in cells_group
+            else np.full(len(cell_ids), -1, dtype=int)
+        )
+        ijk_values = (
+            np.asarray(cells_group["ijk"], dtype=int)
+            if "ijk" in cells_group
+            else np.full((len(cell_ids), 3), -1, dtype=int)
+        )
+        source_member_values = (
+            np.asarray(cells_group["source_members"], dtype=int)
+            if "source_members" in cells_group
+            else np.empty(0, dtype=int)
+        )
+        source_member_offsets = (
+            np.asarray(cells_group["source_member_offsets"], dtype=int)
+            if "source_member_offsets" in cells_group
+            else np.zeros(len(cell_ids) + 1, dtype=int)
+        )
         cells = []
         for index, cell_id in enumerate(cell_ids):
             tag = int(physical_tags[index])
             source_id = int(source_ids[index])
+            source_global_index = int(source_global_indices[index])
+            active_index = int(active_indices[index])
+            raw_ijk = tuple(int(value) for value in ijk_values[index])
             cells.append(
                 Cell(
                     id=int(cell_id),
@@ -177,8 +300,32 @@ def read_model(path: str | Path) -> FVModel:
                     material=cell_materials[index],
                     physical_tag=None if tag < 0 else tag,
                     source_id=None if source_id < 0 else source_id,
+                    source_kind=source_kinds[index] or None,
+                    source_global_index=(
+                        None if source_global_index < 0 else source_global_index
+                    ),
+                    active_index=None if active_index < 0 else active_index,
+                    ijk=None if any(value < 0 for value in raw_ijk) else raw_ijk,
+                    source_members=tuple(
+                        int(value)
+                        for value in source_member_values[
+                            source_member_offsets[index] : source_member_offsets[index + 1]
+                        ]
+                    ),
                 )
             )
+
+        cell_fields: dict[str, CellField] = {}
+        if "cell_fields" in handle:
+            for name, field_group in handle["cell_fields"].items():
+                cell_fields[name] = CellField(
+                    values=np.asarray(field_group["values"]),
+                    unit=_decode(field_group.attrs.get("unit", "")),
+                    source=_decode(field_group.attrs.get("source", "")),
+                    keyword=_decode(field_group.attrs.get("keyword", "")),
+                    aggregation=_decode(field_group.attrs.get("aggregation", "none")),
+                    role=_decode(field_group.attrs.get("role", "property")),
+                )
 
         faces_group = handle["faces"]
         connectivity = np.asarray(faces_group["connectivity"], dtype=int)
@@ -226,6 +373,16 @@ def read_model(path: str | Path) -> FVModel:
         gravity_projections = np.asarray(group["gravity_projection"], dtype=float)
         gravity_deltas = np.asarray(group["gravity_delta"], dtype=float)
         orthogonality = np.asarray(group["orthogonality"], dtype=float)
+        connection_enabled = (
+            np.asarray(group["enabled"], dtype=bool)
+            if "enabled" in group
+            else np.ones(len(connection_ids), dtype=bool)
+        )
+        connection_source_ids = (
+            np.asarray(group["source_connection_id"], dtype=int)
+            if "source_connection_id" in group
+            else np.full(len(connection_ids), -1, dtype=int)
+        )
         intersections = (
             np.asarray(group["intersection"], dtype=float)
             if "intersection" in group
@@ -289,8 +446,52 @@ def read_model(path: str | Path) -> FVModel:
                     gravity_projection=float(gravity_projections[i]),
                     gravity_delta=float(gravity_deltas[i]),
                     orthogonality=float(orthogonality[i]),
+                    enabled=bool(connection_enabled[i]),
+                    source_connection_id=(
+                        None
+                        if int(connection_source_ids[i]) < 0
+                        else int(connection_source_ids[i])
+                    ),
                 )
             )
+
+        source_connections: list[SourceConnection] = []
+        if "source_connections" in handle:
+            source_group = handle["source_connections"]
+            source_connection_ids = np.asarray(source_group["id"], dtype=int)
+            source_cell1 = np.asarray(source_group["cell1"], dtype=int)
+            source_cell2 = np.asarray(source_group["cell2"], dtype=int)
+            source_counts = np.asarray(source_group["source_count"], dtype=int)
+            source_kinds_data = [_decode(value) for value in source_group["kind"][...]]
+            source_directions = [_decode(value) for value in source_group["direction"][...]]
+            source_transmissibilities = np.asarray(
+                source_group["transmissibility"], dtype=float
+            )
+            source_flow = np.asarray(source_group["flow_connected"], dtype=bool)
+            source_matches = np.asarray(source_group["matched_connection"], dtype=int)
+            source_geometry = [
+                _decode(value) for value in source_group["geometry_status"][...]
+            ]
+            source_metadata = [
+                json.loads(_decode(value)) for value in source_group["metadata_json"][...]
+            ]
+            for index, connection_id in enumerate(source_connection_ids):
+                matched = int(source_matches[index])
+                source_connections.append(
+                    SourceConnection(
+                        id=int(connection_id),
+                        cell1=int(source_cell1[index]),
+                        cell2=int(source_cell2[index]),
+                        kind=source_kinds_data[index],
+                        transmissibility=float(source_transmissibilities[index]),
+                        flow_connected=bool(source_flow[index]),
+                        direction=source_directions[index] or None,
+                        matched_connection=None if matched < 0 else matched,
+                        geometry_status=source_geometry[index],
+                        source_count=int(source_counts[index]),
+                        metadata=source_metadata[index],
+                    )
+                )
 
         group = handle["boundaries"]
         boundary_ids = np.asarray(group["id"], dtype=int)
@@ -355,6 +556,8 @@ def read_model(path: str | Path) -> FVModel:
         boundaries=boundaries,
         sources=sources,
         dimension=dimension,
+        cell_fields=cell_fields,
+        source_connections=source_connections,
         options=options,
         metadata=metadata,
         report=report,

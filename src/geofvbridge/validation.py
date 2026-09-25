@@ -18,6 +18,7 @@ def validate_model(model: FVModel, *, report: ValidationReport | None = None) ->
 
     node_count = len(model.points)
     used_cells: set[int] = set()
+    cell_ids = {cell.id for cell in model.cells}
     for cell in model.cells:
         if not np.isfinite(cell.measure) or cell.measure <= tolerance:
             report.add("error", "invalid_measure", "Cell measure is non-positive.", "cell", cell.id)
@@ -32,34 +33,47 @@ def validate_model(model: FVModel, *, report: ValidationReport | None = None) ->
 
     for connection in model.connections:
         used_cells.update((connection.cell1, connection.cell2))
+        disabled_geometry_issue = False
         if not np.all(np.isfinite(connection.intersection)):
-            report.add(
-                "error",
-                "invalid_interface_intersection",
-                "Connection interface intersection is not finite.",
-                "connection",
-                connection.id,
-            )
+            disabled_geometry_issue = True
+            if connection.enabled:
+                report.add(
+                    "error",
+                    "invalid_interface_intersection",
+                    "Connection interface intersection is not finite.",
+                    "connection",
+                    connection.id,
+                )
         if connection.d1 <= tolerance or connection.d2 <= tolerance:
-            report.add(
-                "error",
-                "invalid_intersection_distance",
-                "A centroid-to-interface intersection distance is non-positive.",
-                "connection",
-                connection.id,
-            )
+            disabled_geometry_issue = True
+            if connection.enabled:
+                report.add(
+                    "error",
+                    "invalid_intersection_distance",
+                    "A centroid-to-interface intersection distance is non-positive.",
+                    "connection",
+                    connection.id,
+                )
         elif not np.isclose(
             connection.d1 + connection.d2,
             connection.center_distance,
             rtol=1.0e-9,
             atol=max(tolerance, 1.0e-12),
         ):
+            disabled_geometry_issue = True
+            if connection.enabled:
+                report.add(
+                    "error",
+                    "interface_not_between_centroids",
+                    "The interface intersection is not between the adjacent centroids.",
+                    "connection",
+                    connection.id,
+                )
+        if disabled_geometry_issue and not connection.enabled:
             report.add(
-                "error",
-                "interface_not_between_centroids",
-                "The interface intersection is not between the adjacent centroids.",
-                "connection",
-                connection.id,
+                "warning",
+                "disabled_connection_geometry",
+                "One or more invalid geometric connections are disabled for solver export.",
             )
         if connection.normal_d1 <= tolerance or connection.normal_d2 <= tolerance:
             report.add(
@@ -85,6 +99,59 @@ def validate_model(model: FVModel, *, report: ValidationReport | None = None) ->
                 "connection",
                 connection.id,
             )
+
+    for name, cell_field in model.cell_fields.items():
+        if len(cell_field.values) != len(model.cells):
+            report.add(
+                "error",
+                "invalid_cell_field_length",
+                (
+                    f"Cell field {name!r} has {len(cell_field.values)} values "
+                    f"for {len(model.cells)} cells."
+                ),
+            )
+
+    seen_source_pairs: set[tuple[int, int, str, str | None]] = set()
+    for connection in model.source_connections:
+        if connection.cell1 not in cell_ids or connection.cell2 not in cell_ids:
+            report.add(
+                "error",
+                "invalid_source_connection_cell",
+                "A source connection references an unknown cell.",
+                "source_connection",
+                connection.id,
+            )
+        if connection.cell1 == connection.cell2:
+            report.add(
+                "error",
+                "source_connection_self_loop",
+                "A source connection connects a cell to itself.",
+                "source_connection",
+                connection.id,
+            )
+        if not np.isfinite(connection.transmissibility) or connection.transmissibility < 0.0:
+            report.add(
+                "error",
+                "invalid_source_transmissibility",
+                "Source transmissibility must be finite and non-negative.",
+                "source_connection",
+                connection.id,
+            )
+        pair = (
+            min(connection.cell1, connection.cell2),
+            max(connection.cell1, connection.cell2),
+            connection.kind,
+            connection.direction,
+        )
+        if pair in seen_source_pairs:
+            report.add(
+                "warning",
+                "duplicate_source_connection",
+                "More than one source connection has the same cell pair, kind, and direction.",
+                "source_connection",
+                connection.id,
+            )
+        seen_source_pairs.add(pair)
 
     boundary_cells = {boundary.cell for boundary in model.boundaries}
     for cell in model.cells:

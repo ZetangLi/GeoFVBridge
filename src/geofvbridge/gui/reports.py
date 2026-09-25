@@ -41,6 +41,8 @@ def _section(lines: list[str], title: str) -> None:
 
 def format_fe_inspection(inspection: dict[str, Any], language: str | None = None) -> str:
     """Format the stage-1 Gmsh inspection without exposing a JSON document."""
+    if inspection.get("input_kind") == "petrel":
+        return format_petrel_inspection(inspection, language)
     tr = _translator(language)
     cell_types = dict(inspection.get("cell_types", {}))
     groups = dict(inspection.get("physical_groups", {}))
@@ -78,6 +80,36 @@ def format_fe_inspection(inspection: dict[str, Any], language: str | None = None
         values = bounds.get(axis)
         if values and len(values) >= 2:
             lines.append(f"- {axis.upper()}: {_number(values[0])} ～ {_number(values[1])}")
+    return "\n".join(lines)
+
+
+def format_petrel_inspection(
+    inspection: dict[str, Any], language: str | None = None
+) -> str:
+    """Format a Petrel export inspection."""
+
+    tr = _translator(language)
+    dimensions = inspection.get("dimensions", [])
+    files = dict(inspection.get("files", {}))
+    lines = [tr("Petrel/ECLIPSE 角点网格检查", "Petrel/ECLIPSE corner-point grid inspection")]
+    _section(lines, tr("网格概况", "Grid overview"))
+    lines.extend(
+        [
+            f"{tr('逻辑维数', 'Logical dimensions')}: "
+            + (" × ".join(str(value) for value in dimensions) if dimensions else "—"),
+            f"{tr('逻辑单元', 'Logical cells')}: {_number(inspection.get('logical_cells', 0))}",
+            f"{tr('活动单元', 'Active cells')}: {_number(inspection.get('active_cells', 0))}",
+            f"{tr('非活动单元', 'Inactive cells')}: {_number(inspection.get('inactive_cells', 0))}",
+        ]
+    )
+    _section(lines, tr("源文件", "Source files"))
+    for key in ("egrid", "init", "nnc", "unrst"):
+        lines.append(f"- {key.upper()}: {files.get(key) or tr('未发现', 'not found')}")
+    properties = files.get("properties", [])
+    lines.append(
+        f"- {tr('属性 GRDECL', 'Property GRDECL')}: "
+        f"{_number(len(properties) if isinstance(properties, list) else 0)}"
+    )
     return "\n".join(lines)
 
 
@@ -286,9 +318,51 @@ def format_tough_report(value: Any, language: str | None = None) -> str:
             f"{tr('AHTX 非零单元', 'Cells with nonzero AHTX')}: "
             f"{_number(value['ahtx_nonzero_cells'])}"
         )
+    if value.get("selection_method"):
+        _section(lines, tr("无限体积选择", "Infinite-volume selection"))
+        lines.append(
+            f"{tr('定义方式', 'Definition method')}: "
+            f"{value.get('selection_label', value['selection_method'])}"
+        )
+        lines.append(
+            f"{tr('二维边界面', '2-D boundary faces')}: "
+            f"{_number(value.get('boundary_face_count', 0))}"
+        )
+        minimum = value.get("node_coordinate_min")
+        maximum = value.get("node_coordinate_max")
+        if minimum is not None and maximum is not None:
+            lines.append(
+                f"{tr('Z 节点范围', 'Node Z range')}: "
+                f"{_number(minimum[2])} → {_number(maximum[2])} m"
+            )
     labels = value.get("cell_labels")
     if isinstance(labels, dict):
         lines.append(f"{tr('单元名称映射数量', 'Cell-label mappings')}: {_number(len(labels))}")
+
+    audit = value.get("source_connection_audit")
+    if isinstance(audit, dict):
+        _section(lines, tr("Petrel 连接审计", "Petrel connection audit"))
+        lines.append(
+            f"{tr('源连接总数', 'Total source connections')}: "
+            f"{_number(audit.get('total', 0))}"
+        )
+        lines.append(
+            f"{tr('正源连接', 'Positive source connections')}: "
+            f"{_number(audit.get('positive', 0))}"
+        )
+        lines.append(
+            f"{tr('具有 TOUGH 几何的正连接', 'Positive connections with TOUGH geometry')}: "
+            f"{_number(audit.get('positive_with_tough_geometry', 0))}"
+        )
+        lines.append(
+            f"{tr('忽略的无几何正连接', 'Ignored positive connections without geometry')}: "
+            f"{_number(audit.get('ignored_positive_without_geometry', 0))}"
+        )
+        explicitly_allowed = bool(audit.get("ignore_was_explicitly_allowed", False))
+        lines.append(
+            f"{tr('是否显式允许忽略', 'Ignore explicitly allowed')}: "
+            f"{tr('是', 'yes') if explicitly_allowed else tr('否', 'no')}"
+        )
 
     materials = dict(value.get("materials", {}))
     if materials:
@@ -296,9 +370,29 @@ def format_tough_report(value: Any, language: str | None = None) -> str:
         lines.extend(f"- {source} → {target}" for source, target in materials.items())
 
     if boundary_cells:
-        _section(lines, tr("最终边界单元清单", "Final boundary-cell list"))
+        compact_preview = bool(value.get("selection_method"))
+        _section(
+            lines,
+            tr("样例单元（最多 20 个）", "Sample cells (up to 20)")
+            if compact_preview
+            else tr("最终边界单元清单", "Final boundary-cell list"),
+        )
         for item in boundary_cells:
             reasons = ", ".join(_reason_text(str(reason), tr) for reason in item.get("reasons", []))
+            if compact_preview:
+                centroid = item.get("centroid", [])
+                coordinate = (
+                    f" | {tr('质心', 'centroid')}="
+                    + ", ".join(_number(value) for value in centroid)
+                    if centroid
+                    else ""
+                )
+                lines.append(
+                    f"- {tr('FV 单元', 'FV cell')} {item.get('cell_id', '—')} | "
+                    f"{tr('材料', 'material')}={item.get('material', '—')}{coordinate} | "
+                    f"{tr('原因', 'reason')}={reasons}"
+                )
+                continue
             lines.append(
                 f"- {item.get('label', '—')} | {tr('FV 单元', 'FV cell')} {item.get('cell_id', '—')} | "
                 f"{tr('材料', 'material')}={item.get('material', '—')} | "

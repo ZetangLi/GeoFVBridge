@@ -17,6 +17,7 @@ from typing import Any
 import meshio
 import numpy as np
 
+from ..boundary_selection import resolve_boundary_selection
 from ..model import FVModel
 from ..validation import validate_model
 
@@ -128,6 +129,27 @@ def _effective_interface(model: FVModel, face_measure: float) -> float:
 
 
 def _inactive_cells(model: FVModel, config: dict[str, Any]) -> tuple[set[int], dict[int, list[str]]]:
+    canonical = config.get("inactive_selection")
+    if canonical is not None:
+        conflicts: list[str] = []
+        if config.get("inactive_cells"):
+            conflicts.append("inactive_cells")
+        if config.get("inactive_materials"):
+            conflicts.append("inactive_materials")
+        if config.get("inactive_z_min") is not None:
+            conflicts.append("inactive_z_min")
+        if bool(config.get("inactive_top", False)):
+            conflicts.append("inactive_top")
+        if conflicts:
+            raise ValueError(
+                "inactive_selection cannot be combined with legacy selector(s): "
+                + ", ".join(conflicts)
+            )
+        result = resolve_boundary_selection(model, canonical)
+        selected = {int(value) for value in result.cell_ids}
+        reason = f"{result.method}:{result.label}"
+        return selected, {cell_id: [reason] for cell_id in selected}
+
     selected = {int(value) for value in config.get("inactive_cells", [])}
     reasons: dict[int, list[str]] = {cell_id: ["explicit"] for cell_id in selected}
     materials = {str(value) for value in config.get("inactive_materials", [])}
@@ -222,6 +244,16 @@ class ExportConnection:
     gravity: float
     model_connection: int | None
 
+    @property
+    def isot(self) -> int:
+        """Select PER(1) for horizontal connections, PER(3) for vertical ones.
+
+        The angle to gravity is horizontal from 45 through 135 degrees.
+        Allow cosine roundoff at the inclusive endpoints; keep BETAX unchanged.
+        A zero gravity projection (including a zero gravity vector) selects 1.
+        """
+        return 1 if abs(self.gravity) <= math.sqrt(0.5) + 1.0e-12 else 3
+
 
 @dataclass(slots=True)
 class ResultStep:
@@ -280,6 +312,7 @@ def _prepare_export(model: FVModel, config: dict[str, Any]):
             model_connection=item.id,
         )
         for item in model.connections
+        if item.enabled
     ]
     boundary_generators: list[dict[str, Any]] = []
     boundary_mode = config.get("boundary_mode", "auto")
@@ -375,7 +408,7 @@ def _write_mesh(path: Path, cells: list[ExportCell], connections: list[ExportCon
         stream.write(f"CONNE{HEADER}\n")
         for connection in connections:
             line = (
-                f"{connection.label1:<5}{connection.label2:<5}{'':15}{1:5d}"
+                f"{connection.label1:<5}{connection.label2:<5}{'':15}{connection.isot:5d}"
                 f"{_float_field(connection.d1)}{_float_field(connection.d2)}"
                 f"{_float_field(connection.area)}{_float_field(connection.gravity)}"
             )
@@ -547,6 +580,15 @@ def _write_flow_input(
         stream.write(f"ENDCY{HEADER}\n")
 
 
+def _source_has_tough_geometry(model: FVModel, connection) -> bool:
+    matched = connection.matched_connection
+    return (
+        matched is not None
+        and 0 <= matched < len(model.connections)
+        and model.connections[matched].enabled
+    )
+
+
 def validate_eco2m(
     model: FVModel,
     config: dict[str, Any] | str | Path,
@@ -557,6 +599,15 @@ def validate_eco2m(
         errors.append("TOUGH2/ECO2M export requires a three-dimensional FV dataset.")
     try:
         parsed = _config(config)
+        unrepresented = sum(
+            item.flow_connected and not _source_has_tough_geometry(model, item)
+            for item in model.source_connections
+        )
+        if unrepresented and not parsed.get("allow_unrepresented_source_connections", False):
+            errors.append(
+                f"{unrepresented} positive source connection(s) have no TOUGH geometry. "
+                "Set allow_unrepresented_source_connections=true to export without them."
+            )
         _inactive_cells(model, parsed)
         _cell_ahtx(model, parsed)
         if float(parsed.get("infinite_volume", 1.0e50)) <= 0.0:
@@ -645,6 +696,7 @@ def _write_cell_map(path: Path, cells: list[ExportCell]) -> None:
 
 
 def _export_manifest(
+    model: FVModel,
     cells: list[ExportCell],
     connections: list[ExportConnection],
     labels: dict[int, str],
@@ -658,11 +710,39 @@ def _export_manifest(
         for cell in cells
         if cell.model_cell is not None and (cell.inactive or cell.material_key in overridden)
     ]
+    unrepresented = [
+        connection
+        for connection in model.source_connections
+        if connection.flow_connected
+        and not _source_has_tough_geometry(model, connection)
+    ]
+    source_kinds: dict[str, int] = {}
+    for connection in model.source_connections:
+        source_kinds[connection.kind] = source_kinds.get(connection.kind, 0) + 1
     return {
         "backend": "TOUGH2/ECO2M",
         "cell_label_format": "TOUGH A3,I2",
         "cells": len(cells),
         "connections": len(connections),
+        "source_connection_audit": {
+            "total": len(model.source_connections),
+            "by_kind": source_kinds,
+            "positive": sum(
+                connection.flow_connected for connection in model.source_connections
+            ),
+            "positive_with_tough_geometry": sum(
+                connection.flow_connected
+                and _source_has_tough_geometry(model, connection)
+                for connection in model.source_connections
+            ),
+            "ignored_positive_without_geometry": len(unrepresented),
+            "ignore_was_explicitly_allowed": bool(
+                config.get("allow_unrepresented_source_connections", False)
+            ),
+            "sample_ignored_source_connection_ids": [
+                connection.id for connection in unrepresented[:20]
+            ],
+        },
         "cell_labels": {str(cell): label for cell, label in labels.items()},
         "generated_boundary_cells": [
             {
@@ -705,6 +785,7 @@ def _export_manifest(
             for cell in boundary_cells
         ],
         "materials": {name: encoded.strip() for name, encoded in material_map.items()},
+        "inactive_selection": config.get("inactive_selection"),
         "boundary_mode": config.get("boundary_mode", "auto"),
     }
 
@@ -728,7 +809,7 @@ def export_eco2m_mesh(
     _write_mesh(mesh_path, cells, connections)
     _write_cell_map(map_path, cells)
     manifest = _export_manifest(
-        cells, connections, labels, material_map, inactive_reasons, config
+        model, cells, connections, labels, material_map, inactive_reasons, config
     )
     manifest["files"] = {
         "mesh": str(mesh_path),
@@ -764,7 +845,7 @@ def export_eco2m(
     _write_incon(incon_path, cells, config)
     _write_flow_input(flow_path, cells, material_map, generators, config)
     manifest = _export_manifest(
-        cells, connections, labels, material_map, inactive_reasons, config
+        model, cells, connections, labels, material_map, inactive_reasons, config
     )
     manifest["files"] = {
         "mesh": str(mesh_path),

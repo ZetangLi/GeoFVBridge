@@ -4,7 +4,7 @@
 from . import __version__
 
 APP_NAME = "GeoFVBridge"
-APP_FULL_NAME = "Gmsh to Reusable Finite-Volume Bridge"
+APP_FULL_NAME = "Gmsh and Petrel to Reusable Finite-Volume Bridge"
 
 APP_VERSION = __version__
 

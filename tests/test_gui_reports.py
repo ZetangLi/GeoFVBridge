@@ -30,6 +30,13 @@ class GuiReportTests(unittest.TestCase):
             "boundary_cells": [],
             "inactive_cells": [],
             "generated_boundary_cells": [],
+            "source_connection_audit": {
+                "total": 12,
+                "positive": 10,
+                "positive_with_tough_geometry": 8,
+                "ignored_positive_without_geometry": 2,
+                "ignore_was_explicitly_allowed": True,
+            },
             "files": {
                 "mesh": "MESH",
                 "cell_map": "cell_map.csv",
@@ -42,6 +49,8 @@ class GuiReportTests(unittest.TestCase):
         self.assertNotIn("A0000", report)
         self.assertNotIn("A0001", report)
         self.assertNotIn('"cell_labels"', report)
+        self.assertIn("Ignored positive connections without geometry: 2", report)
+        self.assertIn("Ignore explicitly allowed: yes", report)
 
 
 if __name__ == "__main__":
